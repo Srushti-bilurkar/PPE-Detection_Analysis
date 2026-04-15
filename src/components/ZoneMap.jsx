@@ -1,77 +1,87 @@
 import { useState, useEffect, useRef } from 'react'
 
 /* ============================================================
-   STATIC ZONE + WORKER DATA
-   Matches index.html floor-4 layout exactly.
-   In production, replace with /api/zones?floor=X
+   4 real cameras mapped as zones
    ============================================================ */
-const FLOORS = ['Floor 1', 'Floor 4', 'Floor 8']
+const CAMERA_ZONES = [
+  {
+    id:      'CAM-A01',
+    port:    16389,
+    name:    'PIER CAP 16389',
+    label:   'CAM-A01',
+    type:    'safe',
+    style:   { left: '5%',  top: '8%',  width: '28%', height: '40%' },
+    dots: [
+      { type: 'active',    pos: { left: '10%', top: '22%' } },
+      { type: 'active',    pos: { left: '16%', top: '30%' } },
+      { type: 'idle',      pos: { left: '22%', top: '18%' } },
+      { type: 'active',    pos: { left: '13%', top: '38%' } },
+    ],
+  },
+  {
+    id:      'CAM-A02',
+    port:    16388,
+    name:    'PIER CAP 16388',
+    label:   'CAM-A02',
+    type:    'hazard',
+    style:   { left: '36%', top: '5%',  width: '28%', height: '44%' },
+    dots: [
+      { type: 'active',    pos: { left: '40%', top: '20%' } },
+      { type: 'active',    pos: { left: '47%', top: '28%' } },
+      { type: 'violation', pos: { left: '54%', top: '22%' } },
+    ],
+  },
+  {
+    id:      'CAM-A03',
+    port:    16387,
+    name:    'PIER CAP 16387',
+    label:   'CAM-A03',
+    type:    'warning',
+    style:   { left: '5%',  top: '55%', width: '38%', height: '38%' },
+    dots: [
+      { type: 'active',    pos: { left: '10%', top: '65%' } },
+      { type: 'violation', pos: { left: '18%', top: '72%' } },
+      { type: 'idle',      pos: { left: '26%', top: '68%' } },
+      { type: 'active',    pos: { left: '14%', top: '80%' } },
+    ],
+  },
+  {
+    id:      'CAM-A07',
+    port:    16386,
+    name:    'PIER CAP 16386',
+    label:   'CAM-A07',
+    type:    'safe',
+    style:   { left: '46%', top: '55%', width: '36%', height: '38%' },
+    dots: [
+      { type: 'active',    pos: { left: '52%', top: '62%' } },
+      { type: 'active',    pos: { left: '60%', top: '70%' } },
+      { type: 'idle',      pos: { left: '68%', top: '65%' } },
+    ],
+  },
+]
 
-const FLOOR_DATA = {
-  'Floor 1': {
-    zones: [
-      { id: 'z1', type: 'safe',       label: 'SAFE',       count: 8,  name: 'GROUND FLOOR',  style: { left:'5%',  top:'10%', width:'30%', height:'38%' }, summary: { title:'Ground Floor',   sub:'8 workers · All compliant',        color: '' } },
-      { id: 'z2', type: 'warning',    label: 'WARNING',    count: 3,  name: 'LOADING BAY',   style: { left:'38%', top:'5%',  width:'24%', height:'45%' }, summary: { title:'Loading Bay',    sub:'⚠ 1 PPE violation active',         color: 'var(--amber)' } },
-      { id: 'z3', type: 'safe',       label: 'SAFE',       count: 5,  name: 'STAGING AREA',  style: { left:'65%', top:'8%',  width:'20%', height:'40%' }, summary: { title:'Staging Area',   sub:'5 workers · All compliant',        color: '' } },
-      { id: 'z4', type: 'safe',       label: 'SAFE',       count: 4,  name: 'MATERIAL STORE',style: { left:'5%',  top:'55%', width:'35%', height:'38%' }, summary: { title:'Material Store', sub:'4 workers · All compliant',        color: '' } },
-      { id: 'z5', type: 'restricted', label: 'RESTRICTED', count: 0,  name: 'ELEC ROOM',     style: { left:'43%', top:'55%', width:'38%', height:'38%' }, summary: { title:'Elec Room',      sub:'0 workers · Auth only',            color: 'var(--red-alert)' } },
-    ],
-    dots: [
-      { type:'active',    pos:{ left:'12%', top:'28%' } }, { type:'active',    pos:{ left:'18%', top:'35%' } },
-      { type:'idle',      pos:{ left:'22%', top:'22%' } }, { type:'active',    pos:{ left:'14%', top:'40%' } },
-      { type:'active',    pos:{ left:'44%', top:'22%' } }, { type:'idle',      pos:{ left:'50%', top:'30%' } },
-      { type:'active',    pos:{ left:'55%', top:'62%' } }, { type:'active',    pos:{ left:'62%', top:'68%' } },
-    ],
-    headcount: { total: 20, active: 15, idle: 4, violation: 1 },
-  },
-  'Floor 4': {
-    zones: [
-      { id: 'z1', type: 'safe',       label: 'SAFE',       count: 12, name: 'FRAMING ZONE',  style: { left:'5%',  top:'10%', width:'28%', height:'38%' }, summary: { title:'Framing Zone',   sub:'12 workers · All compliant',       color: '' } },
-      { id: 'z2', type: 'hazard',     label: 'HAZARD',     count: 7,  name: 'MEP SHAFT',     style: { left:'36%', top:'5%',  width:'22%', height:'45%' }, summary: { title:'MEP Shaft',      sub:'7 workers · Full PPE required',    color: '' } },
-      { id: 'z3', type: 'restricted', label: 'RESTRICTED', count: 0,  name: 'ELEC SUB',      style: { left:'61%', top:'8%',  width:'18%', height:'40%' }, summary: { title:'Electrical Sub', sub:'0 workers · Auth only',            color: 'var(--red-alert)' } },
-      { id: 'z4', type: 'warning',    label: 'WARNING',    count: 8,  name: 'WELDING BAY',   style: { left:'5%',  top:'55%', width:'35%', height:'38%' }, summary: { title:'Welding Bay',    sub:'⚠ 2 PPE violations active',        color: 'var(--amber)' } },
-      { id: 'z5', type: 'safe',       label: 'SAFE',       count: 6,  name: 'CONCRETE POUR', style: { left:'43%', top:'55%', width:'38%', height:'38%' }, summary: { title:'Concrete Pour',  sub:'6 workers · All compliant',        color: '' } },
-    ],
-    dots: [
-      { type:'active',    pos:{ left:'12%', top:'28%' } }, { type:'active',    pos:{ left:'18%', top:'35%' } },
-      { type:'idle',      pos:{ left:'22%', top:'22%' } }, { type:'active',    pos:{ left:'14%', top:'40%' } },
-      { type:'active',    pos:{ left:'40%', top:'22%' } }, { type:'active',    pos:{ left:'47%', top:'30%' } },
-      { type:'active',    pos:{ left:'44%', top:'38%' } }, { type:'violation', pos:{ left:'15%', top:'65%' } },
-      { type:'idle',      pos:{ left:'24%', top:'72%' } }, { type:'active',    pos:{ left:'55%', top:'62%' } },
-      { type:'active',    pos:{ left:'62%', top:'68%' } },
-    ],
-    headcount: { total: 33, active: 24, idle: 7, violation: 2 },
-  },
-  'Floor 8': {
-    zones: [
-      { id: 'z1', type: 'safe',       label: 'SAFE',       count: 6,  name: 'STEEL FRAME A', style: { left:'5%',  top:'10%', width:'30%', height:'38%' }, summary: { title:'Steel Frame A',  sub:'6 workers · All compliant',        color: '' } },
-      { id: 'z2', type: 'warning',    label: 'WARNING',    count: 4,  name: 'STEEL FRAME B', style: { left:'38%', top:'5%',  width:'24%', height:'45%' }, summary: { title:'Steel Frame B',  sub:'⚠ 1 PPE violation active',         color: 'var(--amber)' } },
-      { id: 'z3', type: 'hazard',     label: 'HAZARD',     count: 3,  name: 'CRANE ZONE',    style: { left:'65%', top:'8%',  width:'20%', height:'40%' }, summary: { title:'Crane Zone',     sub:'3 workers · Crane ops in progress', color: '' } },
-      { id: 'z4', type: 'restricted', label: 'RESTRICTED', count: 0,  name: 'EDGE ACCESS',   style: { left:'5%',  top:'55%', width:'35%', height:'38%' }, summary: { title:'Edge Access',    sub:'0 workers · Harness required',     color: 'var(--red-alert)' } },
-      { id: 'z5', type: 'safe',       label: 'SAFE',       count: 5,  name: 'SLAB POUR',     style: { left:'43%', top:'55%', width:'38%', height:'38%' }, summary: { title:'Slab Pour',      sub:'5 workers · All compliant',        color: '' } },
-    ],
-    dots: [
-      { type:'active',    pos:{ left:'10%', top:'25%' } }, { type:'active',    pos:{ left:'16%', top:'33%' } },
-      { type:'idle',      pos:{ left:'20%', top:'20%' } }, { type:'violation', pos:{ left:'44%', top:'22%' } },
-      { type:'active',    pos:{ left:'48%', top:'30%' } }, { type:'active',    pos:{ left:'68%', top:'20%' } },
-      { type:'active',    pos:{ left:'50%', top:'62%' } }, { type:'idle',      pos:{ left:'58%', top:'70%' } },
-    ],
-    headcount: { total: 18, active: 13, idle: 4, violation: 1 },
-  },
+const TYPE_COLOR = {
+  safe:       'var(--green-safe)',
+  hazard:     'var(--blue-vivid)',
+  warning:    'var(--amber)',
+  restricted: 'var(--red-alert)',
+}
+const TYPE_LABEL = {
+  safe: 'SAFE', hazard: 'HAZARD', warning: 'WARNING', restricted: 'RESTRICTED',
+}
+const CHIP_CLASS = {
+  safe: 'green', hazard: 'blue', warning: 'amber', restricted: 'red',
 }
 
-/* chip colour map */
-const CHIP_CLASS = { safe: 'green', hazard: 'blue', restricted: 'red', warning: 'amber' }
-
 /* ============================================================
-   AnimatedDot — wiggles slightly to simulate live movement
+   AnimatedDot
    ============================================================ */
 function AnimatedDot({ type, pos }) {
   const dotRef = useRef(null)
   const anim   = useRef(null)
 
   useEffect(() => {
-    if (type === 'violation') return  // violation uses CSS pulse, no JS jitter
+    if (type === 'violation') return
     const el = dotRef.current
     if (!el) return
     const jitter = () => {
@@ -97,71 +107,61 @@ function AnimatedDot({ type, pos }) {
    ZoneMap
    ============================================================ */
 export default function ZoneMap() {
-  const [activeFloor,   setActiveFloor]   = useState('Floor 4')
   const [selectedZone,  setSelectedZone]  = useState(null)
-  const [editMode,      setEditMode]      = useState(false)
+  const [cameras,       setCameras]       = useState([])
+  const [violations,    setViolations]    = useState([])
+  const [selectedDate,  setSelectedDate]  = useState(new Date().toISOString().split('T')[0])
 
-  const floorData = FLOOR_DATA[activeFloor]
+  // poll cameras every 5s for live/offline status
+  useEffect(() => {
+    const load = () =>
+      fetch('/api/cameras').then(r => r.json()).then(setCameras).catch(() => {})
+    load()
+    const id = setInterval(load, 5000)
+    return () => clearInterval(id)
+  }, [])
 
-  // Simulate live worker count drift every 5s
-  const [liveCounts, setLiveCounts] = useState(() =>
-    Object.fromEntries(floorData.zones.map(z => [z.id, z.count]))
+  // violations by camera for selected date
+  useEffect(() => {
+    fetch(`/api/violations-by-camera?date=${selectedDate}`)
+      .then(r => r.json())
+      .then(setViolations)
+      .catch(() => setViolations([]))
+  }, [selectedDate])
+
+  const violByCamera = Object.fromEntries(
+    violations.map(v => [v.camera, v.count])
   )
 
-  useEffect(() => {
-    setLiveCounts(Object.fromEntries(floorData.zones.map(z => [z.id, z.count])))
-    setSelectedZone(null)
-  }, [activeFloor])
+  // live counts from camera status
+  const camStatus = Object.fromEntries(
+    cameras.map(c => [c.id, c.ready])
+  )
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setLiveCounts(prev => {
-        const next = { ...prev }
-        floorData.zones.forEach(z => {
-          const drift = Math.floor(Math.random() * 3) - 1  // -1, 0, +1
-          next[z.id] = Math.max(0, (prev[z.id] ?? z.count) + drift)
-        })
-        return next
-      })
-    }, 5000)
-    return () => clearInterval(timer)
-  }, [floorData])
-
-  const totalWorkers  = floorData.headcount.total
-  const activeWorkers = floorData.headcount.active
-  const idleWorkers   = floorData.headcount.idle
-  const violWorkers   = floorData.headcount.violation
+  const liveCount  = cameras.filter(c => c.ready).length
+  const totalViol  = violations.reduce((s, v) => s + v.count, 0)
 
   return (
     <div className="grid-70-30">
 
-      {/* ── Left: Map panel ───────────────────────────────────── */}
+      {/* ── Left: Zone Map ────────────────────────────────────── */}
       <div className="panel">
         <div className="panel-header">
-          <div className="panel-title">🗺️ Zone Map — Tower A · {activeFloor}</div>
-          <div className="panel-actions" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {FLOORS.map(f => (
-              <button
-                key={f}
-                className="topbar-btn"
-                onClick={() => setActiveFloor(f)}
-                style={{
-                  padding: '4px 8px', fontSize: 11,
-                  background: activeFloor === f ? 'var(--blue-vivid)' : undefined,
-                  color:      activeFloor === f ? '#fff'              : undefined,
-                  borderColor:activeFloor === f ? 'var(--blue-vivid)' : undefined,
-                }}
-              >
-                {f}
-              </button>
-            ))}
-            <button
-              className={`topbar-btn${editMode ? ' primary' : ''}`}
-              onClick={() => setEditMode(e => !e)}
-              style={{ padding: '4px 10px', fontSize: 11 }}
-            >
-              ✏️ {editMode ? 'Done' : 'Edit Zones'}
-            </button>
+          <div className="panel-title">🗺️ Zone Map — Prestige Tower · Pier Cap Cameras</div>
+          <div className="panel-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{
+              fontSize: 11, fontFamily: 'var(--font-mono)',
+              color: liveCount > 0 ? 'var(--green-safe)' : 'var(--amber)',
+            }}>
+              {liveCount > 0 ? '●' : '○'} {liveCount}/4 LIVE
+            </span>
+            <input
+              type="date"
+              className="date-picker"
+              value={selectedDate}
+              onChange={e => setSelectedDate(e.target.value)}
+              style={{ fontSize: 11, padding: '3px 6px' }}
+            />
           </div>
         </div>
 
@@ -170,92 +170,121 @@ export default function ZoneMap() {
             <div className="zone-grid-lines" />
 
             {/* Zones */}
-            {floorData.zones.map(zone => (
-              <div
-                key={zone.id}
-                className={`map-zone ${zone.type}`}
-                style={{
-                  ...zone.style,
-                  cursor: 'pointer',
-                  outline: selectedZone?.id === zone.id ? '2px solid var(--blue-vivid)' : undefined,
-                  outlineOffset: selectedZone?.id === zone.id ? 2 : undefined,
-                }}
-                onClick={() => setSelectedZone(selectedZone?.id === zone.id ? null : zone)}
-              >
-                <div className="zone-type-badge">{zone.label}</div>
-                <div className="zone-count">{liveCounts[zone.id] ?? zone.count}</div>
-                <div className="zone-name">{zone.name}</div>
-              </div>
-            ))}
+            {CAMERA_ZONES.map(zone => {
+              const isLive   = camStatus[zone.id]
+              const vCount   = violByCamera[zone.id]
+                            || violByCamera[`Pier_Cap_Cam_${zone.port}`]
+                            || 0
+              const isSelected = selectedZone?.id === zone.id
+
+              // override type based on live violations
+              const effectiveType = vCount > 0 ? 'warning' : zone.type
+
+              return (
+                <div
+                  key={zone.id}
+                  className={`map-zone ${effectiveType}`}
+                  style={{
+                    ...zone.style,
+                    cursor: 'pointer',
+                    outline: isSelected ? '2px solid var(--blue-vivid)' : undefined,
+                    outlineOffset: isSelected ? 2 : undefined,
+                  }}
+                  onClick={() => setSelectedZone(isSelected ? null : { ...zone, vCount, isLive })}
+                >
+                  {/* live indicator dot top-right */}
+                  <div style={{
+                    position: 'absolute', top: 8, right: 8,
+                    width: 7, height: 7, borderRadius: '50%',
+                    background: isLive ? 'var(--green-safe)' : 'var(--amber)',
+                    boxShadow: isLive ? '0 0 6px var(--green-safe)' : 'none',
+                  }} />
+
+                  <div className="zone-type-badge">
+                    {vCount > 0 ? `⚠ ${vCount} VIOLATION${vCount > 1 ? 'S' : ''}` : TYPE_LABEL[effectiveType]}
+                  </div>
+                  <div className="zone-count">{zone.label}</div>
+                  <div className="zone-name">{zone.name}</div>
+                </div>
+              )
+            })}
 
             {/* Worker dots */}
-            {floorData.dots.map((dot, i) => (
-              <AnimatedDot key={`${activeFloor}-${i}`} type={dot.type} pos={dot.pos} />
-            ))}
+            {CAMERA_ZONES.flatMap((zone, zi) =>
+              zone.dots.map((dot, i) => (
+                <AnimatedDot key={`${zone.id}-${i}`} type={dot.type} pos={dot.pos} />
+              ))
+            )}
 
             {/* Legend */}
             <div className="map-legend">
               <div className="map-legend-item">
-                <div className="map-legend-dot" style={{ background: 'var(--green-safe)' }} />
-                Active
+                <div className="map-legend-dot" style={{ background: 'var(--green-safe)' }} /> Live
               </div>
               <div className="map-legend-item">
-                <div className="map-legend-dot" style={{ background: 'var(--amber)' }} />
-                Idle
+                <div className="map-legend-dot" style={{ background: 'var(--amber)' }} /> Starting
               </div>
               <div className="map-legend-item">
-                <div className="map-legend-dot" style={{ background: 'var(--red-alert)' }} />
-                Violation
+                <div className="map-legend-dot" style={{ background: 'var(--red-alert)' }} /> Violation
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Right: Zone Summary + Headcount ───────────────────── */}
+      {/* ── Right: Zone Summary + Stats ───────────────────────── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-        {/* Zone Summary panel */}
+        {/* Zone Summary */}
         <div className="panel">
           <div className="panel-header">
             <div className="panel-title">Zone Summary</div>
+            <div className="panel-subtitle">{selectedDate}</div>
           </div>
           <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-            {floorData.zones.map((zone, i) => {
-              const s        = zone.summary
-              const isLast   = i === floorData.zones.length - 1
-              const isActive = selectedZone?.id === zone.id
+            {CAMERA_ZONES.map((zone, i) => {
+              const isLive    = camStatus[zone.id]
+              const vCount    = violByCamera[zone.id]
+                             || violByCamera[`Pier_Cap_Cam_${zone.port}`]
+                             || 0
+              const isLast    = i === CAMERA_ZONES.length - 1
+              const isActive  = selectedZone?.id === zone.id
+
+              const subText = vCount > 0
+                ? `⚠ ${vCount} violation${vCount > 1 ? 's' : ''} · ${selectedDate}`
+                : isLive
+                  ? 'Live · No violations'
+                  : 'Stream starting…'
+              const subColor = vCount > 0
+                ? 'var(--red-alert)'
+                : isLive
+                  ? 'var(--green-safe)'
+                  : 'var(--amber)'
+
               return (
                 <div
                   key={zone.id}
-                  onClick={() => setSelectedZone(isActive ? null : zone)}
+                  onClick={() => setSelectedZone(isActive ? null : { ...zone, vCount, isLive })}
                   style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: '10px 0',
                     borderBottom: isLast ? 'none' : '1px solid var(--border)',
                     cursor: 'pointer',
-                    background: isActive ? 'var(--bg-hover)' : 'transparent',
+                    background:   isActive ? 'var(--bg-hover)' : 'transparent',
                     borderRadius: isActive ? 6 : 0,
-                    paddingLeft: isActive ? 8 : 0,
+                    paddingLeft:  isActive ? 8 : 0,
                     paddingRight: isActive ? 8 : 0,
                     transition: 'background 0.2s',
                   }}
                 >
                   <div>
-                    <div style={{
-                      fontSize: 12, fontWeight: 600,
-                      color: s.color || 'var(--text-primary)',
-                    }}>
-                      {s.title}
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {zone.id} · {zone.name}
                     </div>
-                    <div className="text-xs text-muted" style={{
-                      color: s.sub.startsWith('⚠') ? 'var(--red-alert)' : undefined,
-                    }}>
-                      {s.sub}
-                    </div>
+                    <div className="text-xs" style={{ color: subColor }}>{subText}</div>
                   </div>
-                  <span className={`chip ${CHIP_CLASS[zone.type]}`}>
-                    {zone.label}
+                  <span className={`chip ${vCount > 0 ? 'amber' : CHIP_CLASS[zone.type]}`}>
+                    {vCount > 0 ? 'WARNING' : TYPE_LABEL[zone.type]}
                   </span>
                 </div>
               )
@@ -263,44 +292,44 @@ export default function ZoneMap() {
           </div>
         </div>
 
-        {/* Headcount panel */}
+        {/* Headcount / Stats */}
         <div className="panel">
           <div className="panel-header">
-            <div className="panel-title">Headcount</div>
+            <div className="panel-title">Camera Status</div>
           </div>
           <div className="panel-body" style={{ textAlign: 'center' }}>
             <div style={{
               fontFamily: 'var(--font-display)', fontSize: 52,
               fontWeight: 800, color: 'var(--blue-vivid)', lineHeight: 1,
             }}>
-              {totalWorkers}
+              {liveCount}
             </div>
             <div className="text-xs text-muted" style={{ margin: '6px 0 14px' }}>
-              workers on {activeFloor}
+              cameras live of 4
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--green-safe)' }}>{activeWorkers}</div>
-                <div className="text-xs text-muted">Active</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--green-safe)' }}>{liveCount}</div>
+                <div className="text-xs text-muted">Live</div>
               </div>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--amber)' }}>{idleWorkers}</div>
-                <div className="text-xs text-muted">Idle</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--amber)' }}>{4 - liveCount}</div>
+                <div className="text-xs text-muted">Starting</div>
               </div>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--red-alert)' }}>{violWorkers}</div>
-                <div className="text-xs text-muted">Violation</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--red-alert)' }}>{totalViol}</div>
+                <div className="text-xs text-muted">Violations</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Zone drill-down — shows when a zone is clicked */}
+        {/* Zone drill-down on click */}
         {selectedZone && (
           <div className="panel" style={{ border: '1px solid var(--blue-vivid)', borderRadius: 8 }}>
             <div className="panel-header">
               <div className="panel-title" style={{ color: 'var(--blue-vivid)' }}>
-                🔍 {selectedZone.summary.title}
+                🔍 {selectedZone.id}
               </div>
               <button
                 className="topbar-btn"
@@ -312,27 +341,43 @@ export default function ZoneMap() {
             </div>
             <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className="text-xs text-muted">Zone type</span>
-                <span className={`chip ${CHIP_CLASS[selectedZone.type]}`}>{selectedZone.label}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className="text-xs text-muted">Workers</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {liveCounts[selectedZone.id] ?? selectedZone.count}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className="text-xs text-muted">Status</span>
-                <span style={{ fontSize: 12, color: selectedZone.summary.color || 'var(--green-safe)' }}>
-                  {selectedZone.summary.sub}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span className="text-xs text-muted">Camera</span>
-                <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
-                  {selectedZone.type === 'restricted' ? 'CAM-B09' : `CAM-A0${floorData.zones.indexOf(selectedZone) + 1}`}
+                <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                  {selectedZone.id}
                 </span>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-xs text-muted">Zone</span>
+                <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{selectedZone.name}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-xs text-muted">Type</span>
+                <span className={`chip ${CHIP_CLASS[selectedZone.type]}`}>
+                  {TYPE_LABEL[selectedZone.type]}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-xs text-muted">Stream</span>
+                <span style={{ fontSize: 12, color: selectedZone.isLive ? 'var(--green-safe)' : 'var(--amber)' }}>
+                  {selectedZone.isLive ? '● LIVE' : '○ Starting'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-xs text-muted">Violations ({selectedDate})</span>
+                <span style={{
+                  fontSize: 12, fontWeight: 700,
+                  color: selectedZone.vCount > 0 ? 'var(--red-alert)' : 'var(--green-safe)',
+                }}>
+                  {selectedZone.vCount}
+                </span>
+              </div>
+              <button
+                className="topbar-btn"
+                style={{ marginTop: 4, fontSize: 11, width: '100%' }}
+                onClick={() => fetch(`/api/cameras/${selectedZone.id}/restart`).catch(() => {})}
+              >
+                ↺ Restart Stream
+              </button>
             </div>
           </div>
         )}

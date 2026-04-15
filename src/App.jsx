@@ -13,6 +13,7 @@ import OwnerPortal from './components/OwnerPortal'
 import Reports from './components/Reports'
 import Settings from './components/Settings'
 import { useSSE } from './hooks/useSSE'
+import ChatBot from './components/ChatBot'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('safety-dashboard')
@@ -37,6 +38,7 @@ export default function App() {
           {activeTab === 'settings'         && <Settings />}
         </div>
       </div>
+      <ChatBot />
     </div>
   )
 }

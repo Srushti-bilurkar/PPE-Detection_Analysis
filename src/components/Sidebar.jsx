@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const NAV_ITEMS = [
   { id: 'safety-dashboard', icon: '🛡️', label: 'Safety Dashboard', badge: true },
@@ -24,23 +24,42 @@ const MANAGEMENT = [
 ]
 
 export default function Sidebar({ activeTab, setActiveTab, alerts }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed,     setCollapsed]     = useState(false)
+  const [lastSeenCount, setLastSeenCount] = useState(0)
+  const [viewedTabs,    setViewedTabs]    = useState(new Set(['safety-dashboard']))
+
   const unackCount = alerts.filter(a => !a.acknowledged).length
 
+  // New alerts since last time user visited alerts/dashboard tab
+  const newCount = Math.max(0, unackCount - lastSeenCount)
+
+  // When user clicks a badge tab, mark as seen
+  const handleTabClick = (id) => {
+    setActiveTab(id)
+    if (id === 'alerts' || id === 'safety-dashboard') {
+      setLastSeenCount(unackCount)
+      setViewedTabs(prev => new Set([...prev, id]))
+    }
+  }
+
+  // When unackCount increases (new alert arrives), show badge again
+  useEffect(() => {
+    // Do nothing — badge auto-shows when newCount > 0
+  }, [unackCount])
+
   function NavItem({ item }) {
-    const isActive = activeTab === item.id
-    const showBadge = item.badge && item.id === 'alerts' && unackCount > 0
-    const dashBadge = item.badge && item.id === 'safety-dashboard' && unackCount > 0
+    const isActive  = activeTab === item.id
+    const showBadge = item.badge && newCount > 0
 
     return (
       <div
         className={`nav-item${isActive ? ' active' : ''}`}
-        onClick={() => setActiveTab(item.id)}
+        onClick={() => handleTabClick(item.id)}
       >
         <span className="nav-icon">{item.icon}</span>
         {!collapsed && <span>{item.label}</span>}
-        {(showBadge || dashBadge) && (
-          <span className="nav-badge">{unackCount}</span>
+        {showBadge && (
+          <span className="nav-badge">{newCount}</span>
         )}
       </div>
     )

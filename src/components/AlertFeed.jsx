@@ -4,7 +4,9 @@ import axios from 'axios'
 /* ─── helpers ─────────────────────────────────────────────── */
 function timeAgo(iso) {
   if (!iso) return ''
-  const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
+  // Strip IST suffix so Date can parse it
+  const cleaned = typeof iso === 'string' ? iso.replace(' IST', '').trim() : iso
+  const diff = Math.floor((Date.now() - new Date(cleaned)) / 1000)
   if (diff < 60)    return `${diff}s ago`
   if (diff < 3600)  return `${Math.floor(diff / 60)} min ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`
@@ -104,7 +106,7 @@ export default function AlertFeed({ alerts = [], compact = false, maxItems }) {
     // Optimistically mark as acked in local state
     setAckedIds(prev => new Set([...prev, mongoId]))
     try {
-      await axios.post(`/api/alerts/${mongoId}/ack`)
+      await axios.post(`/api/alerts/${mongoId}`)
     } catch (_) {
       // If it fails the local ack stays — consistent with original behaviour
     }
