@@ -14,31 +14,35 @@ import Reports from './components/Reports'
 import Settings from './components/Settings'
 import { useSSE } from './hooks/useSSE'
 import ChatBot from './components/ChatBot'
+import { UserProvider } from './components/UserContext'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('safety-dashboard')
+  const [activeTab,  setActiveTab]  = useState('safety-dashboard')
+  const [globalDate, setGlobalDate] = useState(new Date().toISOString().split('T')[0])
   const { alerts, kpi } = useSSE()
 
   return (
-    <div className="app-shell">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} alerts={alerts} />
-      <div className="main">
-        <Topbar activeTab={activeTab} setActiveTab={setActiveTab} alerts={alerts} kpi={kpi} />
-        <div className="content-area">
-          {activeTab === 'safety-dashboard' && <SafetyDashboard alerts={alerts} kpi={kpi} />}
-          {activeTab === 'zone-map'         && <ZoneMap />}
-          {activeTab === 'ppe-compliance'   && <PPECompliance />}
-          {activeTab === 'alerts'           && <AlertFeedPage alerts={alerts} />}
-          {activeTab === 'productivity'     && <Productivity />}
-          {activeTab === 'scorecard'        && <Scorecard />}
-          {activeTab === 'progress'         && <Progress />}
-          {activeTab === 'milestones'       && <Milestones />}
-          {activeTab === 'owner-portal'     && <OwnerPortal />}
-          {activeTab === 'reports'          && <Reports />}
-          {activeTab === 'settings'         && <Settings />}
+    <UserProvider>
+      <div className="app-shell">
+        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} alerts={alerts} />
+        <div className="main">
+          <Topbar activeTab={activeTab} setActiveTab={setActiveTab} alerts={alerts} kpi={kpi} />
+          <div className="content-area">
+            {activeTab === 'safety-dashboard' && <SafetyDashboard alerts={alerts} kpi={kpi} selectedDate={globalDate} onDateChange={setGlobalDate} />}
+            {activeTab === 'zone-map'         && <ZoneMap />}
+            {activeTab === 'ppe-compliance'   && <PPECompliance selectedDate={globalDate} onDateChange={setGlobalDate} />}
+            {activeTab === 'alerts'           && <AlertFeedPage alerts={alerts} selectedDate={globalDate} onDateChange={setGlobalDate} />}
+            {activeTab === 'productivity'     && <Productivity />}
+            {activeTab === 'scorecard'        && <Scorecard />}
+            {activeTab === 'progress'         && <Progress />}
+            {activeTab === 'milestones'       && <Milestones />}
+            {activeTab === 'owner-portal'     && <OwnerPortal />}
+            {activeTab === 'reports'          && <Reports />}
+            {activeTab === 'settings'         && <Settings />}
+          </div>
         </div>
+        <ChatBot />
       </div>
-      <ChatBot />
-    </div>
+    </UserProvider>
   )
 }

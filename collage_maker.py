@@ -30,6 +30,14 @@ PADDING_BOTTOM      = 15
 MIN_PERSON_H        = 60
 MIN_PERSON_W        = 25
  
+# ── Fixed badge constants (absolute pixel values, never relative) ─────────────
+BADGE_BAR_H    = 22          # label bar height at bottom — always 22px
+BADGE_FONT     = None        # set after cv2 import (cv2.FONT_HERSHEY_SIMPLEX)
+BADGE_LABEL_SCALE = 0.42     # font scale for label text — fixed
+BADGE_CONF_SCALE  = 0.38     # font scale for confidence % — fixed
+BADGE_THICKNESS   = 1        # font stroke thickness — always 1
+BADGE_CONF_H      = 18       # confidence badge height at top-right — always 18px
+ 
 COLLAGE_SAVE_DIR = r"C:\Users\srustib\Desktop\yolo-frontend\collages_output"
  
 print("="*65, flush=True)
@@ -39,6 +47,7 @@ print("="*65, flush=True)
 try:
     import cv2
     import numpy as np
+    BADGE_FONT = cv2.FONT_HERSHEY_SIMPLEX
     print("  OK: opencv loaded", flush=True)
 except ImportError:
     print("  ERROR: pip install opencv-python numpy", flush=True)
@@ -150,7 +159,7 @@ def detect_and_crop(yolo_model, img, img_num: int, camera: str, snap_timestamp) 
                 "camera":             camera,
                 "img_num":            img_num,
                 "person_num":         person_count,
-                "x1": x1p, "y1": y1p, "x2": x2p, "y2": y2p,  # padded coords
+                "x1": x1p, "y1": y1p, "x2": x2p, "y2": y2p,
                 "snap_timestamp_ist": to_ist_str(snap_timestamp),
             })
  
@@ -173,7 +182,6 @@ def detect_and_crop_tiled(yolo_model, img, img_num: int, camera: str, snap_times
         for crop in detect_and_crop(yolo_model, img[ty1:ty2, tx1:tx2], img_num, camera, snap_timestamp):
             person_count += 1
             crop["label"] = f"Img{img_num}-P{person_count}"
-            # shift tile-relative coords back to full image coords
             crop["x1"] += tx1; crop["x2"] += tx1
             crop["y1"] += ty1; crop["y2"] += ty1
             all_crops.append(crop)
@@ -183,28 +191,41 @@ def detect_and_crop_tiled(yolo_model, img, img_num: int, camera: str, snap_times
  
  
 # ── Badge ─────────────────────────────────────────────────────────────────────
-# FIX: black bar, green text, thickness=1, smaller font scale
-# so full label like "Img312-P1" is visible and not bold/cut off
+# FIXED: All badge dimensions are absolute pixel values — never relative to crop size.
+# This function should only be called AFTER the crop has been resized to CROP_W x CROP_H,
+# so the badge always appears identically sized across every person tile in the collage.
  
-def stamp_badge(crop, label: str, conf: float):
-    img  = crop.copy()
+def stamp_badge(img, label: str, conf: float):
+    """
+    Stamp a fixed-size label bar at the bottom and a fixed-size confidence
+    badge at the top-right onto an already-resized (CROP_W x CROP_H) image.
+ 
+    IMPORTANT: Call this AFTER cv2.resize(), never before.
+    All sizes are absolute pixels so they never scale with crop dimensions.
+    """
+    img = img.copy()
     h, w = img.shape[:2]
  
-    # ── Label bar at bottom ──
-    bar_h = max(20, int(h * 0.09))                        # small bar
-    cv2.rectangle(img, (0, h - bar_h), (w, h), (0, 0, 0), -1)  # black bg
+    # ── Bottom label bar — fixed 22px height ─────────────────────────────
+    cv2.rectangle(img, (0, h - BADGE_BAR_H), (w, h), (0, 0, 0), -1)
+    cv2.putText(
+        img, label,
+        (3, h - 6),
+        BADGE_FONT, BADGE_LABEL_SCALE,
+        (60, 255, 60), BADGE_THICKNESS, cv2.LINE_AA
+    )
  
-    font_scale = max(0.32, min(0.52, w / 380))            # fits full label
-    cv2.putText(img, label, (3, h - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                (60, 255, 60), 1, cv2.LINE_AA)            # green, thin (thickness=1)
- 
-    # ── Confidence badge top-right ──
+    # ── Top-right confidence badge — fixed 18px height ───────────────────
     conf_str = f"{conf:.0%}"
-    (tw, _), _ = cv2.getTextSize(conf_str, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
-    cv2.rectangle(img, (w - tw - 8, 0), (w, 18), (0, 0, 0), -1)
-    cv2.putText(img, conf_str, (w - tw - 4, 14),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 60), 1, cv2.LINE_AA)
+    (tw, _), _ = cv2.getTextSize(conf_str, BADGE_FONT, BADGE_CONF_SCALE, 1)
+    badge_w = tw + 8
+    cv2.rectangle(img, (w - badge_w, 0), (w, BADGE_CONF_H), (0, 0, 0), -1)
+    cv2.putText(
+        img, conf_str,
+        (w - tw - 4, 13),
+        BADGE_FONT, BADGE_CONF_SCALE,
+        (200, 200, 60), 1, cv2.LINE_AA
+    )
  
     return img
  
@@ -238,8 +259,15 @@ def build_collage(batch, collage_num):
         col = idx %  PERSONS_PER_ROW
         x = GAP + col * (CROP_W + GAP)
         y = HEADER_H + GAP + row * (CROP_H + GAP)
-        canvas[y:y + CROP_H, x:x + CROP_W] = cv2.resize(person["stamped"], (CROP_W, CROP_H),
-                                                          interpolation=cv2.INTER_AREA)
+ 
+        # Step 1: Resize the RAW crop to fixed tile size
+        resized = cv2.resize(person["crop"], (CROP_W, CROP_H),
+                             interpolation=cv2.INTER_AREA)
+ 
+        # Step 2: Stamp badge AFTER resize — now always identical pixel size
+        stamped = stamp_badge(resized, person["label"], person["conf"])
+ 
+        canvas[y:y + CROP_H, x:x + CROP_W] = stamped
         cv2.rectangle(canvas, (x - 1, y - 1), (x + CROP_W, y + CROP_H), (80, 80, 80), 1)
  
     return canvas
@@ -267,9 +295,10 @@ def process_snapshot(snapshot, db, yolo_model, img_num: int):
     crops = detect_and_crop_tiled(yolo_model, img, img_num, camera, snap_timestamp)
     print(f"  Persons  : {len(crops)} detected", flush=True)
  
+    # Store raw crops — badges are stamped later inside build_collage after resize
     stamped = []
     for p in crops:
-        stamped.append({**p, "stamped": stamp_badge(p["crop"], p["label"], p["conf"]), "snap_id": snap_id})
+        stamped.append({**p, "snap_id": snap_id})
  
     db.snapshots.update_one({"_id": snap_id}, {"$set": {"collage_processed": True}})
     return stamped
@@ -330,7 +359,7 @@ def main():
     print(f"  OK: MongoDB — {DB_NAME}", flush=True)
  
     print("  Loading YOLO model...", flush=True)
-    yolo_model = YOLO("yolov8n.pt")
+    yolo_model = YOLO(r"C:\Users\srustib\Desktop\yolo-frontend\runs\runs\detect\ppe_model_final\weights\best.pt")
     print(f"  OK: YOLO ready", flush=True)
  
     result = db.snapshots.update_many(
@@ -376,7 +405,6 @@ def main():
                 print(f"\n  ⏱  {COLLAGE_INTERVAL}s elapsed — buffer empty, no collage built.", flush=True)
                 continue
  
-            # Build collage(s) — whatever is in buffer
             total_persons   = len(pending_crops)
             collage_results = []
  

@@ -1,13 +1,21 @@
+from pydoc import doc
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, RedirectResponse
 from pymongo import MongoClient, DESCENDING
 from bson import ObjectId
 from pathlib import Path
-import json, time, asyncio, signal, sys, subprocess, threading, os, base64
+import json, time, asyncio, signal, sys, subprocess, threading, os, base64,io
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from torch import _print
+from fastapi.responses import StreamingResponse
 load_dotenv(dotenv_path=r"C:\Users\srustib\Desktop\yolo-frontend\.env")
+import time
+ 
+CACHE = {}
+CACHE_TTL = 15
 
 app = FastAPI()
 
@@ -466,8 +474,8 @@ def get_kpi(date: str = None):
             )
         live_persons += persons
         live_violations += sum(
-            1 for p in doc.get("ppe", [])
-            if p.get("violation_type") in ("no_helmet", "no_vest", "both_missing")
+        1 for p in doc.get("ppe", [])
+        if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
         )
 
     # ── Peak frame per camera (DAILY MAX — worst seen today) ──
@@ -492,10 +500,10 @@ def get_kpi(date: str = None):
     peak_persons    = sum(c["max_workers"]    for c in cam_peak.values())
     peak_violations = sum(c["max_violations"] for c in cam_peak.values())
 
-    total_persons    = live_persons
-    total_violations = live_violations
-    total_safe       = max(0, live_persons - live_violations)
-    compliance_pct   = round((total_safe / live_persons * 100), 1) if live_persons else 100.0
+    total_persons    = peak_persons
+    total_violations = peak_violations
+    total_safe       = max(0, peak_persons - peak_violations)
+    compliance_pct   = round((total_safe / peak_persons * 100), 1) if peak_persons else 100.0
 
     # ── Alerts ──
     open_raw = list(ppe_results_col.find(
@@ -781,6 +789,7 @@ def get_violations_by_camera(date: str = None):
     pipeline = [
         {"$match": query},
         {"$unwind": "$ppe"},
+        {"$match": {"ppe.violation_type": {"$in": ["no_helmet", "no_vest", "both_missing"]}}},
         {"$group": {"_id": "$camera", "count": {"$sum": 1}}},
         {"$sort":  {"count": -1}},
     ]
@@ -953,9 +962,9 @@ def get_ppe_compliance_by_zone(date: str = None):
             )
 
         helmet_v = sum(1 for p in doc.get("ppe", [])
-                       if p.get("violation_type") in ("no_helmet", "both_missing"))
+            if str(p.get("violation_type") or "").strip() in ("no_helmet", "both_missing"))
         vest_v   = sum(1 for p in doc.get("ppe", [])
-                       if p.get("violation_type") in ("no_vest", "both_missing"))
+            if str(p.get("violation_type") or "").strip() in ("no_vest", "both_missing"))
 
         slot = cam_peak[cam]
         if persons   > slot["max_workers"]:  slot["max_workers"]  = persons
@@ -1106,10 +1115,10 @@ def get_hourly_trend(date: str = None, shift: str = "day"):
                 len(doc.get("ppe", [])) or 0
             )
 
-        # Violations in this single frame
+        # Violations in this single frame (excludes null, "", missing)
         violations_in_frame = sum(
             1 for p in doc.get("ppe", [])
-            if p.get("violation_type") in ("no_helmet", "no_vest", "both_missing")
+            if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
         )
 
         # MAX per camera — same logic for both workers and violations
@@ -1221,430 +1230,1061 @@ def delete_image(image_id: str):
         raise HTTPException(status_code=400, detail="Invalid image_id")
     return {"status": "deleted"}
 
- 
-
-
 # ═════════════════════════════════════════════════════════════════════════════
-
 # CHATBOT — Safety AI Assistant powered by GPT-4o + MongoDB data
-
 # ═════════════════════════════════════════════════════════════════════════════
-
+ 
 import re as _re
-
+import hashlib as _hashlib
 from openai import OpenAI as _OpenAI
+from datetime import datetime, timedelta
+from collections import defaultdict
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# QUERY CACHE  (in-memory, TTL = 5 minutes)
+# ─────────────────────────────────────────────────────────────────────────────
+_QUERY_CACHE: dict = {}
+_QUERY_CACHE_TTL   = 300   # seconds
+ 
+def _cache_key(query_plan: dict) -> str:
+    return _hashlib.md5(json.dumps(query_plan, sort_keys=True, default=str).encode()).hexdigest()
+ 
+def _cache_get(key: str):
+    entry = _QUERY_CACHE.get(key)
+    if entry and (time.time() - entry["ts"]) < _QUERY_CACHE_TTL:
+        return entry["value"]
+    return None
+ 
+def _cache_set(key: str, value: str):
+    _QUERY_CACHE[key] = {"value": value, "ts": time.time()}
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# DATE RANGE RESOLVER
+# ─────────────────────────────────────────────────────────────────────────────
+def resolve_date_range(message: str):
+    """Returns (start_date_str, end_date_str, label, is_range)"""
+    now       = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+ 
+    # ── YYYY-MM-DD (ISO format) ───────────────────────────────────────────
+    iso = _re.search(r'\b(\d{4}-\d{2}-\d{2})\b', message)
+    if iso:
+        d = iso.group(1)
+        return d, d, f"on {d}", False
+ 
+    # ── DD-MM-YYYY  or  D-M-YYYY  or any combo of 1-2 digit day/month ────
+    # Must have a 4-digit year so we don't match hour patterns like "4:00"
+    dmy = _re.search(r'\b(\d{1,2})-(\d{1,2})-(\d{4})\b', message)
+    if dmy:
+        day, month, year = dmy.group(1), dmy.group(2), dmy.group(3)
+        try:
+            dt = datetime.strptime(f"{day}-{month}-{year}", "%d-%m-%Y")
+            d  = dt.strftime("%Y-%m-%d")
+            return d, d, f"on {d}", False
+        except ValueError:
+            pass   # invalid date like 32-13-2026 — fall through
+ 
+    # ── "last week" / "past week" ─────────────────────────────────────────
+    if _re.search(r'\b(last\s+week|past\s+week|previous\s+week)\b', message, _re.IGNORECASE):
+        monday = now - timedelta(days=now.weekday() + 7)
+        sunday = monday + timedelta(days=6)
+        return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d"), "last week", True
+ 
+    # ── "this week" ───────────────────────────────────────────────────────
+    if _re.search(r'\bthis\s+week\b', message, _re.IGNORECASE):
+        monday = now - timedelta(days=now.weekday())
+        return monday.strftime("%Y-%m-%d"), today_str, "this week", True
+ 
+    # ── "last N days" ─────────────────────────────────────────────────────
+    m = _re.search(r'\blast\s+(\d+)\s+days?\b', message, _re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return (now - timedelta(days=n)).strftime("%Y-%m-%d"), today_str, f"last {n} days", True
+ 
+    # ── "yesterday" ───────────────────────────────────────────────────────
+    if _re.search(r'\byesterday\b', message, _re.IGNORECASE):
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        return yesterday, yesterday, "yesterday", False
+ 
+    # ── default: actual today ─────────────────────────────────────────────
+    return today_str, today_str, "today", False
  
  
+# ─────────────────────────────────────────────────────────────────────────────
+# TERMINAL LOGGER
+# ─────────────────────────────────────────────────────────────────────────────
+def _log_banner(title: str):
+    print(f"\n{'='*60}")
+    print(f"  {title}")
+    print(f"{'='*60}")
+ 
+def _log_section(title: str, content: str = ""):
+    print(f"\n{'─'*60}")
+    print(f"  {title}")
+    print(f"{'─'*60}")
+    if content:
+        print(content)
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# MONGO QUERY RUNNER  (full terminal output, cached)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
+    """Returns (result_text, from_cache). Prints ALL documents."""
+    ck     = _cache_key(query_plan)
+    cached = _cache_get(ck)
+    if cached:
+        _log_section(f"MONGODB RESULT  [{label}]  [FROM CACHE]")
+        print(cached)
+        return cached, True
+ 
+    try:
+        collection_name = query_plan.get("collection", "ppe_results")
+        operation       = query_plan.get("operation", "find")
+        query_filter    = query_plan.get("filter", {})
+        projection      = query_plan.get("projection", None)
+        sort_field      = query_plan.get("sort", None)
+        limit           = int(query_plan.get("limit", 500))
+        pipeline        = query_plan.get("pipeline", None)
+ 
+        col_map = {
+            "ppe_results": ppe_results_col,
+            "snapshots":   snapshots_col,
+            "alerts":      alerts_col,
+            "violations":  violations_col,
+            "collages":    db["collages"],
+        }
+        col = col_map.get(collection_name, ppe_results_col)
+ 
+        if operation == "aggregate" and pipeline:
+            results = list(col.aggregate(pipeline))
+        elif operation == "count":
+            count = col.count_documents(query_filter)
+            result_text = f"Count result: {count}"
+            _log_section(f"MONGODB RESULT  [{label}]")
+            print(f"  {result_text}")
+            _cache_set(ck, result_text)
+            return result_text, False
+        elif operation == "distinct":
+            field   = query_plan.get("field", "camera")
+            res_raw = col.distinct(field, query_filter)
+            result_text = (
+                f"No distinct values for '{field}'."
+                if not res_raw
+                else f"Distinct '{field}' ({len(res_raw)} values): {res_raw}"
+            )
+            _log_section(f"MONGODB RESULT  [{label}]")
+            print(f"  {result_text}")
+            _cache_set(ck, result_text)
+            return result_text, False
+        else:
+            cursor = col.find(query_filter, projection)
+            if sort_field:
+                cursor = cursor.sort(sort_field[0], sort_field[1])
+            results = list(cursor.limit(limit))
+ 
+        if not results:
+            result_text = "No documents found matching the query."
+            _log_section(f"MONGODB RESULT  [{label}]")
+            print(f"  {result_text}")
+            _cache_set(ck, result_text)
+            return result_text, False
+ 
+        # ── print ALL docs to terminal with no truncation ─────────────────
+        _log_section(f"MONGODB RESULT  [{label}]  —  {len(results)} document(s)")
+        lines = []
+        for i, doc in enumerate(results):
+            doc["_id"] = str(doc.get("_id", ""))
+            for big_field in ("all_persons", "collage_id", "image", "crop_b64"):
+                doc.pop(big_field, None)
+            if "ppe" in doc and isinstance(doc["ppe"], list):
+                doc["ppe"] = [
+                    {"label": p.get("label", "?"), "violation_type": p.get("violation_type", "none")}
+                    for p in doc["ppe"]
+                ]
+            line = f"  [{i+1:>3}] {json.dumps(doc, default=str)}"
+            lines.append(line)
+            print(line)   # prints EVERY document — no truncation
+ 
+        result_text = f"Query returned {len(results)} document(s):\n" + "\n".join(lines)
+        _cache_set(ck, result_text)
+        return result_text, False
+ 
+    except Exception as e:
+        err = f"Query execution error: {e}"
+        _log_section(f"MONGODB ERROR  [{label}]")
+        print(f"  {err}")
+        return err, False
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# FAST-PATH AGGREGATIONS
+# Returns (result_text, pipeline_used) or (None, None)
+# ─────────────────────────────────────────────────────────────────────────────
+def _try_fast_path(message: str, date_from: str, date_to: str, is_range: bool):
+    msg = message.lower()
+ 
+    def _date_stage(d_from, d_to):
+        if d_from == d_to:
+            return {"$match": {"camera_ts": {"$regex": f"^{d_from}"}}}
+        return {"$match": {"camera_ts": {"$gte": d_from, "$lt": d_to + "T99"}}}
+ 
+    pipeline    = None
+    result_text = None
+ 
+    # ── Active / open violations  (FIX 3: use date_from, not today) ──────
+    if _re.search(r'\bactive\b.*\bviolation|violation.*\bactive\b|open\s+violation', msg):
+        pipeline = [
+            {"$match": {"camera_ts": {"$regex": f"^{date_from}"}}},   # ← date_from
+            {"$unwind": "$ppe"},
+            {"$match": {"ppe.violation_type": {"$in": ["no_helmet", "no_vest", "both_missing"]}}},
+            {"$group": {
+                "_id":            "$ppe.label",
+                "camera":         {"$last": "$camera"},
+                "violation_type": {"$last": "$ppe.violation_type"},
+                "last_seen":      {"$last": "$camera_ts"},
+            }},
+            {"$sort": {"last_seen": -1}},
+        ]
+        results = list(ppe_results_col.aggregate(pipeline))
+        if not results:
+            result_text = f"No active violations found on {date_from}."
+        else:
+            lines = [f"Active violations on {date_from} — {len(results)} unique worker(s):"]
+            for r in results:
+                lines.append(
+                    f"  Worker {r['_id']} | {r['violation_type']} "
+                    f"| Camera {r['camera']} | Last seen {r['last_seen']}"
+                )
+            result_text = "\n".join(lines)
+ 
+    # ── Max violations at a specific hour  (FIX 2: suffix required) ──────
+    # Old pattern matched bare digits like "4" inside "10-4-2026".
+    # New pattern: hour digit(s) MUST be followed by am / pm / :00
+    # so "11am", "2pm", "14:00" match but "10-4-2026" does not.
+    # REPLACE the existing hour_m pipeline with this:
+    else:
+        hour_m = _re.search(
+            r'\b(\d{1,2})(am|pm|:00)\b.*\b(max|peak|most|highest)\b'
+            r'|\b(max|peak|most|highest)\b.*\b(\d{1,2})(am|pm|:00)\b'
+            r'|\bpeak\b.*\b(\d{1,2})\s*(?:am|pm)?\s*(?:to|-)\s*(\d{1,2})',
+            msg
+        )
+        
+        # Also handle "Xam to Ypm" range patterns explicitly
+        range_m = _re.search(
+            r'\b(\d{1,2})(am|pm)\s*(?:to|-)\s*(\d{1,2})(am|pm)\b', msg
+        )
+        
+        if range_m or _re.search(r'\beach\s+(camera|cam)\b.*\bpeak\b|\bpeak\b.*\beach\s+(camera|cam)\b'
+                                r'|\bper.camera\b|\bby.camera\b', msg):
+            # Determine hour range
+            if range_m:
+                h_start = int(range_m.group(1))
+                s1 = range_m.group(2).lower()
+                h_end   = int(range_m.group(3))
+                s2 = range_m.group(4).lower()
+                if s1 == "pm" and h_start != 12: h_start += 12
+                if s1 == "am" and h_start == 12: h_start = 0
+                if s2 == "pm" and h_end   != 12: h_end   += 12
+                if s2 == "am" and h_end   == 12: h_end   = 0
+                # Build regex that matches any hour in range
+                hour_patterns = [f"{h:02d}:" for h in range(h_start, h_end)]
+                hour_regex = "|".join(hour_patterns)
+                time_label = f"{h_start:02d}:00 to {h_end:02d}:00"
+            else:
+                hour_regex = "1[01]:"   # fallback: 10-11am
+                time_label = "that hour"
+
+            pipeline = [
+                {"$match": {"camera_ts": {"$regex": f"^{date_from}"}}},
+                # Filter to the time window
+                {"$match": {"camera_ts": {"$regex": hour_regex}}},
+                # Unwind and keep only violations
+                {"$unwind": "$ppe"},
+                {"$match": {"ppe.violation_type": {"$in": ["no_helmet", "no_vest", "both_missing"]}}},
+                # Count violations per (camera, timestamp frame)
+                {"$group": {
+                    "_id":        {"camera": "$camera", "ts": "$camera_ts"},
+                    "violations": {"$sum": 1},
+                }},
+                # Peak (max) violations per camera across all frames in that window
+                {"$group": {
+                    "_id":             "$_id.camera",
+                    "peak_violations": {"$max": "$violations"},
+                    "peak_at":         {"$last": "$_id.ts"},
+                }},
+                {"$sort": {"_id": 1}},
+            ]
+
+            results = list(ppe_results_col.aggregate(pipeline))
+
+            if not results:
+                result_text = (
+                    f"No violations found between {time_label} on {date_from}."
+                )
+            else:
+                lines = [
+                    f"Peak violations per camera ({time_label}) on {date_from}:\n"
+                ]
+                grand_total = 0
+                for r in results:
+                    cam  = r["_id"] or "Unknown"
+                    peak = r["peak_violations"]
+                    at   = r.get("peak_at", "")
+                    grand_total += peak
+                    lines.append(
+                        f"  {cam}: peak = {peak} violation(s)  [worst frame: {at}]"
+                    )
+                lines.append(f"\n  ─────────────────────────────────")
+                lines.append(f"  SUM of all camera peaks: {grand_total} violations")
+                result_text = "\n".join(lines)
+ 
+    if result_text is None:
+        return None, None
+ 
+    return result_text, pipeline
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# OPENAI CLIENT
+# ─────────────────────────────────────────────────────────────────────────────
 def get_openai_client():
-
     api_key = os.getenv("OPENAI_API_KEY")
-
     if not api_key:
-
         raise ValueError("OPENAI_API_KEY not set in .env")
-
     return _OpenAI(api_key=api_key)
  
  
 # ─────────────────────────────────────────────────────────────────────────────
-
-# DYNAMIC SCHEMA — reads a real document so GPT uses correct field names
-
+# SHARED GPT EXPLANATION STEP
+# Used by both fast-path and GPT-query-path
 # ─────────────────────────────────────────────────────────────────────────────
+def _gpt_explain(openai_client, user_message: str, db_result_text: str,
+                 date_label: str, history: list) -> tuple:
+    """Returns (reply_text, tokens_used)"""
 
-def get_dynamic_schema() -> str:
-    sample = ppe_results_col.find_one({}, {
-        "camera": 1, "camera_ts": 1, "ppe": 1,
-        "total_persons_count": 1, "total_violation_count": 1
-    })
-    if not sample:
-        return "Collection ppe_results appears to be empty."
-
-    ppe_array = sample.get("ppe", [])
-    ppe_keys = list(ppe_array[0].keys()) if ppe_array else []
-    ts_value = sample.get("camera_ts_ist") or sample.get("camera_ts") or "NOT FOUND"
-
-    return f"""
-=== MongoDB Schema: ppe_results ===
-FIELDS: camera, camera_ts, total_persons_count, total_violation_count, ppe[]
-TIMESTAMP: "camera_ts" = "{ts_value}" → filter: {{"camera_ts": {{"$regex": "^YYYY-MM-DD"}}}}
-PPE ARRAY keys: {ppe_keys}
-  violation_type: "no_helmet" | "no_vest" | "both_missing" | (empty = safe)
-  label: worker id
-RULES:
-1. Always $unwind "$ppe" before $match on ppe fields
-2. One doc = one frame. Workers are inside ppe[]
-"""
-
-    return schema
- 
- 
-# ─────────────────────────────────────────────────────────────────────────────
-
-# AVAILABLE DATES
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_available_dates() -> list:
-
-    all_ts = []
-
-    for doc in ppe_results_col.find({}, {"camera_ts": 1, "camera_ts_ist": 1}).limit(500):
-
-        ts = doc.get("camera_ts_ist") or doc.get("camera_ts") or ""
-
-        if ts:
-
-            all_ts.append(str(ts)[:10])
-
-    return sorted(set(all_ts))
- 
- 
-# ─────────────────────────────────────────────────────────────────────────────
-
-# MONGO QUERY RUNNER
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_mongo_query(query_plan: dict) -> str:
-
+    # ── Aggregate in Python if large list (FREE — saves tokens) ──────────
+    context_for_gpt = db_result_text
     try:
+        parsed = json.loads(db_result_text) if isinstance(db_result_text, str) else db_result_text
+        if isinstance(parsed, list) and len(parsed) > 5:
+            total         = len(parsed)
+            type_counts   = {}
+            camera_counts = {}
+            for item in parsed:
+                vtype = item.get("type") or item.get("violation_type") or "unknown"
+                type_counts[vtype] = type_counts.get(vtype, 0) + 1
+                cam = item.get("camera", "unknown")
+                camera_counts[cam] = camera_counts.get(cam, 0) + 1
 
-        collection_name = query_plan.get("collection", "ppe_results")
+            summary_lines = [f"Total violations: {total}", "By type:"]
+            for k, v in sorted(type_counts.items(), key=lambda x: -x[1]):
+                summary_lines.append(f"  - {k}: {v}")
+            summary_lines.append("By camera:")
+            for k, v in sorted(camera_counts.items(), key=lambda x: -x[1]):
+                summary_lines.append(f"  - {k}: {v}")
 
-        operation       = query_plan.get("operation", "find")
+            context_for_gpt = "\n".join(summary_lines)
+            print("\n  [Python Aggregation — sent to GPT instead of raw records]")
+            print(context_for_gpt)
+    except Exception:
+        context_for_gpt = db_result_text  # fallback to original if anything fails
 
-        query_filter    = query_plan.get("filter", {})
-
-        projection      = query_plan.get("projection", None)
-
-        sort_field      = query_plan.get("sort", None)
-
-        limit           = min(int(query_plan.get("limit", 50)), 200)
-
-        pipeline        = query_plan.get("pipeline", None)
- 
-        col_map = {
-
-            "ppe_results": ppe_results_col,
-
-            "snapshots":   snapshots_col,
-
-            "alerts":      alerts_col,
-
-            "violations":  violations_col,
-
-            "collages":    db["collages"],
-
-        }
-
-        col = col_map.get(collection_name, ppe_results_col)
- 
-        # ── execute ──────────────────────────────────────────────────────
-
-        if operation == "aggregate" and pipeline:
-
-            results = list(col.aggregate(pipeline))
- 
-        elif operation == "count":
-
-            count = col.count_documents(query_filter)
-
-            return f"Count result: {count}"
- 
-        elif operation == "distinct":
-
-            field   = query_plan.get("field", "camera")
-
-            results = col.distinct(field, query_filter)
-
-            if not results:
-
-                return f"No distinct values found for '{field}' with the given filter."
-
-            return (
-
-                f"Distinct values for '{field}' ({len(results)} total): {results}"
-
+    # ── Build messages ────────────────────────────────────────────────────
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"You are a construction site safety AI assistant. "
+                f"Answer the user's question clearly using ONLY the numbers/data from the DB result. "
+                f"Time reference: '{date_label}'. "
+                f"Translate: no_helmet=no helmet worn, no_vest=no vest worn, both_missing=missing both. "
+                f"If the result has multiple rows (trend / breakdown), list ALL of them. "
+                f"Do NOT invent numbers. Be direct and factual."
             )
- 
-        else:  # find
+        }
+    ]
+    for h in history[-6:]:
+        if h.get("role") in ("user", "assistant") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
 
-            cursor = col.find(query_filter, projection)
+    messages.append({
+        "role": "user",
+        "content": (
+            f"Question: {user_message}\n\n"
+            f"DB result:\n{context_for_gpt}\n\n"  # ← context_for_gpt not db_result_text
+            f"Give a clear, complete answer using the data above."
+        )
+    })
 
-            if sort_field:
-
-                cursor = cursor.sort(sort_field[0], sort_field[1])
-
-            results = list(cursor.limit(limit))
- 
-        if not results:
-
-            return "No documents found matching the query."
- 
-        # ── flatten for GPT ───────────────────────────────────────────────
-
-        lines = []
-
-        for i, doc in enumerate(results[:100]):
-
-            doc["_id"] = str(doc.get("_id", ""))
-
-            for big_field in ("all_persons", "collage_id", "image", "crop_b64"):
-
-                doc.pop(big_field, None)
-
-            if "ppe" in doc and isinstance(doc["ppe"], list):
-
-                doc["ppe"] = [
-
-                    {
-
-                        "label":          p.get("label", "?"),
-
-                        "violation_type": p.get("violation_type", "none"),
-
-                    }
-
-                    for p in doc["ppe"]
-
-                ]
-
-            lines.append(f"[{i+1}] {json.dumps(doc, default=str)}")
- 
-        return f"Query returned {len(results)} document(s):\n" + "\n".join(lines[:10])
- 
-    except Exception as e:
-
-        return f"Query execution error: {e}"
- 
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        max_tokens=500,
+        temperature=0.1,
+    )
+    reply  = response.choices[0].message.content.strip()
+    tokens = response.usage.total_tokens
+    return reply, tokens
  
 # ─────────────────────────────────────────────────────────────────────────────
-
 # CHAT ENDPOINT
-
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.post("/api/chat")
- 
 async def chat_endpoint(request: Request):
- 
     from fastapi import HTTPException
  
     try:
- 
         body = await request.json()
- 
     except Exception:
- 
         raise HTTPException(status_code=400, detail="Invalid JSON")
  
-    user_message = body.get("message", "").strip()
+    raw_message = body.get("message", "").strip()
+    history     = body.get("history", [])
  
-    history      = body.get("history", [])
- 
-    if not user_message:
- 
+    if not raw_message:
         raise HTTPException(status_code=400, detail="Message is empty")
  
-    available_dates = get_available_dates()
+    # ── spell-fix ─────────────────────────────────────────────────────────
+    try:
+        user_message = _print(raw_message)
+        if not user_message or not isinstance(user_message, str):
+            user_message = raw_message
+    except Exception:
+        user_message = raw_message
  
-    latest_date     = available_dates[-1] if available_dates else datetime.now().strftime("%Y-%m-%d")
- 
-    yesterday_date  = available_dates[-2] if len(available_dates) >= 2 else latest_date
- 
-    # Greetings — no tokens used
- 
-    GREETINGS = ["hi","hello","hey","good morning","good afternoon","good evening","howdy","sup","greetings","hii","hiii"]
- 
+    # ── header banner ─────────────────────────────────────────────────────
+    _log_banner("NEW CHAT REQUEST")
+    print(f"  USER    : {raw_message}")
+   
+    processed_message = user_message
+    # ── greetings shortcut ────────────────────────────────────────────────
+    GREETINGS = {
+        "hi","hello","hey","good morning","good afternoon","good evening",
+        "howdy","sup","greetings","hii","hiii","helo","hi there",
+    }
     if user_message.lower().strip("!.,? ") in GREETINGS:
- 
         return {
-            "reply": "👷 Hello! I'm YOLOIntel Safety Assistant.\n\nAsk me anything about site safety:\n• How many violations today?\n• Which workers are missing helmets?\n• Which camera has most violations?\n• Show compliance summary\n• Worker safety report",
-            "tokens_used": 0, "query_used": None, "date": latest_date
+            "reply": (
+                "👷 Hello! I'm YOLOIntel Safety Assistant.\n\n"
+                "Ask me anything about site safety:\n"
+                "• How many violations today?\n"
+                "• Which workers are missing helmets?\n"
+                "• Which camera has the most violations?\n"
+                "• Show compliance summary\n"
+                "• Violation trend last week\n"
+                "• Max violations at 11am today\n"
+                "• Active violations right now"
+            ),
+            "tokens_used": 0,
+            "query_used":  None,
+            "date":        datetime.now().strftime("%Y-%m-%d"),
         }
  
-    # Resolve date
+    # ── resolve date range ────────────────────────────────────────────────
+    date_from, date_to, date_label, is_range = resolve_date_range(user_message)
  
-    explicit_date = _re.search(r'\d{4}-\d{2}-\d{2}', user_message)
- 
-    if explicit_date:
- 
-        resolved_date = explicit_date.group()
- 
-    elif _re.search(r'\byesterday\b', user_message, _re.IGNORECASE):
- 
-        resolved_date = yesterday_date
- 
-    else:
- 
-        resolved_date = latest_date
- 
-    is_today = (resolved_date == latest_date)
- 
-    sanitized_message = _re.sub(
- 
-        r'\b(today|yesterday|this week|last week)\b',
- 
-        f'on {resolved_date}',
- 
-        user_message, flags=_re.IGNORECASE,
- 
-    )
- 
-    current_hour = datetime.now().strftime("%H")
- 
-    prev_hour    = str(int(current_hour) - 1).zfill(2)
+    _log_section("DATE RESOLUTION")
+    print(f"  date_from  : {date_from}")
+    print(f"  date_to    : {date_to}")
+    print(f"  label      : {date_label}")
+    print(f"  is_range   : {is_range}")
  
     try:
- 
         openai_client = get_openai_client()
- 
     except ValueError as e:
- 
         raise HTTPException(status_code=500, detail=str(e))
  
-    # ── STEP 1: GPT writes query (short prompt) ───────────────────────────
+    # ══════════════════════════════════════════════════════════════════════
+    # FAST-PATH  (known patterns — skip GPT query-generation step)
+    # ══════════════════════════════════════════════════════════════════════
+    fast_result, fast_pipeline = _try_fast_path(user_message, date_from, date_to, is_range)
  
-    query_prompt = f"""MongoDB PPE query generator.
-DATE: {resolved_date}
-COLLECTION: ppe_results
-KEY FIELDS: camera_ts (string "2026-04-15 10:30:00 IST"), camera, ppe[{{label, violation_type}}]
-violation_type values: "no_helmet" | "no_vest" | "both_missing"
-RULE: $unwind "$ppe" before any $match on ppe fields.
+    if fast_result is not None:
+        _log_section("PATH", "FAST-PATH  (query-generation tokens saved)")
+ 
+        # show pipeline
+        if fast_pipeline:
+            _log_section("FAST-PATH PIPELINE  (MongoDB)")
+            print(json.dumps(fast_pipeline, indent=2, default=str))
+ 
+        # show raw result
+        _log_section("FAST-PATH  RAW DB RESULT")
+        print(fast_result)
+ 
+        # GPT explanation
+        _log_section("STEP — GPT EXPLANATION  (fast-path)")
+        try:
+            reply, explain_tokens = _gpt_explain(
+                openai_client, user_message, fast_result, date_label, history
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
+ 
+        _log_section("GPT EXPLANATION REPLY")
+        print(reply)
+ 
+        _log_section("TOKEN USAGE SUMMARY")
+        print(f"  query_generation  :   0   (fast-path — no GPT query step)")
+        print(f"  explanation       : {explain_tokens:>4}")
+        print(f"  ─────────────────────────────────")
+        print(f"  TOTAL             : {explain_tokens:>4}")
+        print(f"{'='*60}\n")
+ 
+        return {
+            "reply":       reply,
+            "tokens_used": explain_tokens,
+            "query_used":  {"fast_path": True, "pipeline": fast_pipeline},
+            "date":        date_from,
+        }
+ 
+    # ══════════════════════════════════════════════════════════════════════
+    # GPT-PATH  (GPT writes the MongoDB query)
+    # ══════════════════════════════════════════════════════════════════════
+    _log_section("PATH", "GPT-PATH  (GPT generates MongoDB query)")
+ 
+    sanitized_message = user_message
+    sanitized_message = _re.sub(r'\btoday\b',       f'on {date_from}',                sanitized_message, flags=_re.IGNORECASE)
+    sanitized_message = _re.sub(r'\byesterday\b',   f'on {date_from}',                sanitized_message, flags=_re.IGNORECASE)
+    sanitized_message = _re.sub(r'\blast\s+week\b', f'from {date_from} to {date_to}', sanitized_message, flags=_re.IGNORECASE)
+    sanitized_message = _re.sub(r'\bthis\s+week\b', f'from {date_from} to {date_to}', sanitized_message, flags=_re.IGNORECASE)
+ 
+    query_prompt = f"""You are a MongoDB expert for a construction PPE monitoring system.
 
+COLLECTION: ppe_results
+SCHEMA:
+  camera_ts             : string  "2026-04-17 11:23:45 IST"
+  camera                : string  "CAM-A01"
+  persons_count         : int     (workers in this frame)
+  total_persons_count   : int     (same field, alternate name)
+  ppe[]                 : array
+    label               : string  worker id e.g. "W-3"
+    violation_type      : string  "no_helmet" | "no_vest" | "both_missing" | "" (empty = safe)
+
+DATE: {date_from}  to  {date_to}
 QUESTION: "{sanitized_message}"
 
-Reply ONLY with valid JSON query plan. No markdown. Use these templates:
-Count violations: {{"collection":"ppe_results","operation":"aggregate","pipeline":[{{"$match":{{"camera_ts":{{"$regex":"^{resolved_date}"}}}}}},{{"$unwind":"$ppe"}},{{"$match":{{"ppe.violation_type":{{"$in":["no_helmet","no_vest","both_missing"]}}}}}},{{"$count":"total"}}]}}
-List workers: {{"collection":"ppe_results","operation":"aggregate","pipeline":[{{"$match":{{"camera_ts":{{"$regex":"^{resolved_date}"}}}}}},{{"$unwind":"$ppe"}},{{"$match":{{"ppe.violation_type":{{"$in":["no_helmet","no_vest","both_missing"]}}}}}},{{"$group":{{"_id":"$ppe.label","camera":{{"$first":"$camera"}},"type":{{"$first":"$ppe.violation_type"}}}}}}]}}
-By camera: {{"collection":"ppe_results","operation":"aggregate","pipeline":[{{"$match":{{"camera_ts":{{"$regex":"^{resolved_date}"}}}}}},{{"$unwind":"$ppe"}},{{"$group":{{"_id":"$camera","count":{{"$sum":1}}}}}},{{"$sort":{{"count":-1}}}}]}}"""
+CORE RULES (never break these):
+1. Date filter for single day  → {{"camera_ts": {{"$regex": "^{date_from}"}}}}
+2. Date filter for range       → {{"camera_ts": {{"$gte": "{date_from}", "$lt": "{date_to}T99"}}}}
+3. Hour filter                 → append hour regex e.g. "^{date_from}.*11:" for 11am
+4. ALWAYS $unwind "$ppe" BEFORE any $match on ppe.* fields
+5. Violation types to count    → ["no_helmet", "no_vest", "both_missing"]
+6. "Peak per camera" means:
+     - group by (camera + camera_ts) → count violations per frame
+     - then group by camera → $max of that count
+     - then $sum the peaks in Python (include all cameras in output, don't limit to 1)
+7. "Compliance %" means: (persons_count - violations) / persons_count * 100
+8. ALWAYS filter out null/empty violation_type BEFORE counting:
+   {{"ppe.violation_type": {{"$in": ["no_helmet", "no_vest", "both_missing"]}}}}
+   NEVER count documents where violation_type is null, "", or missing.
+
+THINK step by step:
+- What is the user actually asking for? (count / list / peak / trend / compliance)
+- What time window? (single day / hour range / date range)
+- Should I group by camera, by hour, by worker, or just count?
+- Do I need $unwind before filtering ppe fields?
+- Build the pipeline that answers exactly that.
+
+OUTPUT: Return ONLY a raw JSON object. No markdown, no backticks, no explanation.
+Format: {{"collection":"ppe_results","operation":"aggregate","pipeline":[...]}}
+"""
  
-    query_plan = None
- 
+    # ── STEP 1: GPT generates query ───────────────────────────────────────
+    query_plan        = None
     query_result_text = ""
+    query_tokens      = 0
  
-    query_tokens = 0
+    _log_section("STEP 1 — GPT QUERY GENERATION")
  
     try:
- 
-        q_response   = openai_client.chat.completions.create(
- 
+        q_response  = openai_client.chat.completions.create(
             model="gpt-4o",
- 
             messages=[{"role": "user", "content": query_prompt}],
- 
-            max_tokens=250,   # reduced from 1000
- 
+            max_tokens=600,
             temperature=0,
- 
         )
- 
         raw          = q_response.choices[0].message.content.strip()
- 
         query_tokens = q_response.usage.total_tokens
- 
-        raw          = raw.replace("```json","").replace("```","").strip()
- 
+        raw          = raw.replace("```json", "").replace("```", "").strip()
         query_plan   = json.loads(raw)
-        print(f"[STEP 1] GPT QUERY ({query_tokens} tokens):")
+ 
+        print(f"  Tokens used  : {query_tokens}")
+        print(f"  Query plan   :")
         print(json.dumps(query_plan, indent=2))
  
     except Exception as e:
- 
-        query_result_text = f"Query error: {e}"
- 
+        query_result_text = f"Query generation error: {e}"
+        print(f"  ERROR: {query_result_text}")
         query_plan = None
  
     # ── STEP 2: Run on MongoDB ────────────────────────────────────────────
+    _log_section("STEP 2 — MONGODB EXECUTION")
  
     if query_plan:
+        query_result_text, from_cache = run_mongo_query(query_plan, label="GPT-generated")
+        if from_cache:
+            print("  (result served from cache — 0 extra DB calls)")
+    else:
+        print("  Skipped — no valid query plan.")
  
-        query_result_text = run_mongo_query(query_plan)
-        print(f"[STEP 2] MONGODB RESULT:")
-        print(query_result_text[:500])
- 
-    # ── STEP 3: GPT explains (short prompt) ──────────────────────────────
- 
-    date_label = "today" if is_today else ("yesterday" if resolved_date == yesterday_date else f"on {resolved_date}")
- 
-    explain_messages = [
- 
-        {
- 
-            "role": "system",
- 
-            "content": f"Safety AI. Answer in ONE sentence only. Use numbers from DB result directly. Say '{date_label}'. no_helmet=no helmet, no_vest=no vest, both_missing=missing both. No explanation needed."
-        }
- 
-    ]
- 
-    # Only last 4 messages history (reduced from 6)
- 
-    for h in history[-4:]:
- 
-        if h.get("role") in ("user","assistant") and h.get("content"):
- 
-            explain_messages.append({"role": h["role"], "content": h["content"]})
- 
-    explain_messages.append({
- 
-        "role": "user",
- 
-        "content": f"Question: {user_message}\nDB result:\n{query_result_text}\nAnswer directly."
- 
-    })
+    # ── STEP 3: GPT explains ──────────────────────────────────────────────
+    _log_section("STEP 3 — GPT EXPLANATION")
  
     try:
- 
-        e_response  = openai_client.chat.completions.create(
- 
-            model="gpt-4o",
- 
-            messages=explain_messages,
- 
-            max_tokens=150,   # reduced from 700
- 
-            temperature=0.1,
- 
+        reply, explain_tokens = _gpt_explain(
+            openai_client, user_message, query_result_text, date_label, history
         )
- 
-        reply       = e_response.choices[0].message.content.strip()
- 
-        tokens_used = query_tokens + e_response.usage.total_tokens
-        print(f"[STEP 3] GPT REPLY:")
-
-        print(reply)
-
-        print(f"\n[TOTAL] query:{query_tokens} + explain:{e_response.usage.total_tokens} = {tokens_used} tokens")
-
-        print("=" * 60 + "\n")
- 
- 
     except Exception as e:
- 
         raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
  
+    total_tokens = query_tokens + explain_tokens
+ 
+    _log_section("GPT EXPLANATION REPLY")
+    print(reply)
+ 
+    _log_section("TOKEN USAGE SUMMARY")
+    print(f"  query_generation  : {query_tokens:>4}")
+    print(f"  explanation       : {explain_tokens:>4}")
+    print(f"  ─────────────────────────────────")
+    print(f"  TOTAL             : {total_tokens:>4}")
+    print(f"{'='*60}\n")
+ 
     return {
- 
         "reply":       reply,
- 
-        "tokens_used": tokens_used,
- 
+        "tokens_used": total_tokens,
         "query_used":  query_plan,
- 
-        "date":        resolved_date,
- 
+        "date":        date_from,
     }
  
+# ═════════════════════════════════════════════════════════════════════════════
+# Reports Endpoints (PDF generation using reportlab)
+# ═════════════════════════════════════════════════════════════════════════════
 
- 
+@app.get("/api/reports/daily-safety")
+def report_daily_safety(date: str = None):
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas as rl_canvas
+    except ImportError:
+        return Response(content="reportlab not installed. Run: pip install reportlab", status_code=500)
+
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    kpi     = get_kpi(date)
+    results = list(ppe_results_col.find(date_match(date)))
+
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, h - 60, "Daily Safety Report")
+    c.setFont("Helvetica", 12)
+    c.drawString(50, h - 85, f"Date: {date}")
+    c.drawString(50, h - 105, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, h - 140, "KPI Summary")
+    c.setFont("Helvetica", 11)
+    y = h - 160
+    for label, val in [
+        ("Total Persons",    kpi["total_persons"]),
+        ("Safe Workers",     kpi["total_safe"]),
+        ("Active Violations",kpi["total_violations"]),
+        ("PPE Compliance",   f"{kpi['compliance_pct']}%"),
+        ("Active Cameras",   kpi["active_cameras"]),
+        ("Critical Alerts",  kpi["critical_alerts"]),
+        ("Warning Alerts",   kpi["warning_alerts"]),
+    ]:
+        c.drawString(60, y, f"{label}: {val}")
+        y -= 18
+
+    c.setFont("Helvetica-Bold", 13)
+    y -= 10
+    c.drawString(50, y, "Violation Details")
+    c.setFont("Helvetica", 10)
+    y -= 20
+    count = 0
+    for doc in results:
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            if vt not in ("no_helmet", "no_vest", "both_missing"):
+                continue
+            ts  = doc.get("camera_ts_ist") or doc.get("camera_ts") or ""
+            cam = doc.get("camera", "")
+            lbl = p.get("label", "?")
+            c.drawString(60, y, f"{ts}  |  {cam}  |  Worker {lbl}  |  {vt}")
+            y -= 15
+            count += 1
+            if y < 60:
+                c.showPage()
+                y = h - 60
+                c.setFont("Helvetica", 10)
+
+    if count == 0:
+        c.drawString(60, y, "No violations found for this date.")
+
+    c.save()
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=daily_safety_{date}.pdf"})
+
+
+@app.get("/api/reports/ppe-summary")
+def report_ppe_summary(date: str = None):
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas as rl_canvas
+    except ImportError:
+        return Response(content="reportlab not installed.", status_code=500)
+
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    compliance = get_ppe_compliance(date)
+    zones      = get_ppe_compliance_by_zone(date)
+
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, h - 60, "Weekly PPE Summary")
+    c.setFont("Helvetica", 12)
+    c.drawString(50, h - 85, f"Date: {date}")
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(50, h - 120, "Overall Compliance")
+    c.setFont("Helvetica", 11)
+    y = h - 140
+    for label, val in [
+        ("Helmet Compliance", f"{compliance['helmet']}%"),
+        ("Vest Compliance",   f"{compliance['vest']}%"),
+        ("Total Persons",     compliance["total_persons"]),
+        ("Wearing Helmet",    compliance["wearing_helmet"]),
+        ("Not Wearing Helmet",compliance["not_wearing_helmet"]),
+        ("Wearing Vest",      compliance["wearing_vest"]),
+        ("Not Wearing Vest",  compliance["not_wearing_vest"]),
+    ]:
+        c.drawString(60, y, f"{label}: {val}")
+        y -= 18
+
+    c.setFont("Helvetica-Bold", 13)
+    y -= 10
+    c.drawString(50, y, "Per Camera Breakdown")
+    c.setFont("Helvetica", 10)
+    y -= 20
+    for z in zones:
+        c.drawString(60, y,
+            f"{z['camera']}  |  Total: {z['total']}  |  "
+            f"No Helmet: {z['not_wearing_helmet']}  |  No Vest: {z['not_wearing_vest']}")
+        y -= 15
+        if y < 60:
+            c.showPage()
+            y = h - 60
+
+    c.save()
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=ppe_summary_{date}.pdf"})
+
+
+@app.get("/api/reports/alerts")
+def report_alerts(date: str = None):
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas as rl_canvas
+    except ImportError:
+        return Response(content="reportlab not installed.", status_code=500)
+
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    results    = list(ppe_results_col.find(date_match(date)).sort("analyzed_at_ist", DESCENDING))
+    alert_list = build_alert_list(results)
+
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, h - 60, "Incident / Alert Report")
+    c.setFont("Helvetica", 12)
+    c.drawString(50, h - 85, f"Date: {date}")
+    c.drawString(50, h - 105, f"Total Alerts: {len(alert_list)}")
+
+    c.setFont("Helvetica-Bold", 11)
+    y = h - 135
+    c.drawString(50,  y, "Time")
+    c.drawString(160, y, "Camera")
+    c.drawString(270, y, "Worker")
+    c.drawString(350, y, "Type")
+    c.drawString(470, y, "ACK")
+    y -= 5
+    c.line(50, y, w - 50, y)
+    y -= 15
+
+    c.setFont("Helvetica", 9)
+    for a in alert_list:
+        ts  = str(a.get("timestamp", ""))[:19]
+        cam = a.get("camera", "")[-10:]
+        wid = a.get("worker_id", "")
+        vt  = a.get("violation_type", "")
+        ack = "Yes" if a.get("acknowledged") else "No"
+        c.drawString(50,  y, ts)
+        c.drawString(160, y, cam)
+        c.drawString(270, y, wid)
+        c.drawString(350, y, vt)
+        c.drawString(470, y, ack)
+        y -= 14
+        if y < 60:
+            c.showPage()
+            y = h - 60
+            c.setFont("Helvetica", 9)
+
+    if not alert_list:
+        c.drawString(50, y, "No alerts found for this date.")
+
+    c.save()
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=alerts_{date}.pdf"})
+@app.get("/api/reports/weekly-safety")
+def report_weekly_safety(date: str = None):
+    """Generate a weekly report for the 7 days ending on `date`."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib import colors
+    except ImportError:
+        return Response(content="reportlab not installed. Run: pip install reportlab", status_code=500)
+
+    # ── Date range: 7 days ending on `date` ──────────────────────────────
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    try:
+        end_dt   = datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return Response(content="Invalid date format. Use YYYY-MM-DD", status_code=400)
+
+    start_dt  = end_dt - timedelta(days=6)   # 7-day window inclusive
+    start_str = start_dt.strftime("%Y-%m-%d")
+    end_str   = end_dt.strftime("%Y-%m-%d")
+
+    # ── Fetch ALL docs in the 7-day window ───────────────────────────────
+    query = {
+        "$or": [
+            {"camera_ts_ist": {"$gte": start_str, "$lte": end_str + " 99"}},
+            {"camera_ts":     {"$gte": start_str, "$lte": end_str + " 99"}},
+        ]
+    }
+    results = list(ppe_results_col.find(query))
+
+    # ── Aggregate per day ─────────────────────────────────────────────────
+    from collections import defaultdict
+    day_stats = defaultdict(lambda: {
+        "persons": 0, "violations": 0,
+        "no_helmet": 0, "no_vest": 0, "both_missing": 0,
+        "frames": 0
+    })
+
+    for doc in results:
+        ts  = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
+        if not ts or ts < start_str or ts > end_str:
+            continue
+
+        persons = doc.get("persons_count") or doc.get("total_persons_count") or len(doc.get("ppe", [])) or 0
+        day_stats[ts]["persons"]   += persons
+        day_stats[ts]["frames"]    += 1
+
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            if vt in ("no_helmet", "no_vest", "both_missing"):
+                day_stats[ts]["violations"] += 1
+            if vt in ("no_helmet", "both_missing"):
+                day_stats[ts]["no_helmet"]  += 1
+            if vt in ("no_vest", "both_missing"):
+                day_stats[ts]["no_vest"]    += 1
+            if vt == "both_missing":
+                day_stats[ts]["both_missing"] += 1
+
+    # Fill in all 7 days (even days with no data)
+    all_days = []
+    for i in range(7):
+        d = (start_dt + timedelta(days=i)).strftime("%Y-%m-%d")
+        all_days.append(d)
+
+    # ── Weekly totals ─────────────────────────────────────────────────────
+    total_persons    = sum(day_stats[d]["persons"]    for d in all_days)
+    total_violations = sum(day_stats[d]["violations"] for d in all_days)
+    total_safe       = max(0, total_persons - total_violations)
+    compliance_pct   = round((total_safe / total_persons * 100), 1) if total_persons else 100.0
+    total_no_helmet  = sum(day_stats[d]["no_helmet"]  for d in all_days)
+    total_no_vest    = sum(day_stats[d]["no_vest"]    for d in all_days)
+    worst_day        = max(all_days, key=lambda d: day_stats[d]["violations"]) if results else end_str
+
+    # ── Per-camera weekly breakdown ───────────────────────────────────────
+    cam_stats = defaultdict(lambda: {"persons": 0, "no_helmet": 0, "no_vest": 0})
+    for doc in results:
+        ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
+        if not ts or ts < start_str or ts > end_str:
+            continue
+        cam     = doc.get("camera", "Unknown")
+        persons = doc.get("persons_count") or doc.get("total_persons_count") or len(doc.get("ppe", [])) or 0
+        cam_stats[cam]["persons"] += persons
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            if vt in ("no_helmet", "both_missing"): cam_stats[cam]["no_helmet"] += 1
+            if vt in ("no_vest",   "both_missing"): cam_stats[cam]["no_vest"]   += 1
+
+    # ── Build PDF ─────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    pw, ph = A4
+
+    def section_header(y, text):
+        c.setFillColorRGB(0.13, 0.13, 0.2)
+        c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
+        c.setFillColorRGB(1, 1, 1)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(48, y + 2, text)
+        c.setFillColorRGB(0, 0, 0)
+        return y - 28
+
+    # Title block
+    c.setFillColorRGB(0.05, 0.27, 0.53)
+    c.rect(0, ph - 80, pw, 80, fill=1, stroke=0)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(48, ph - 42, "Weekly Safety Report")
+    c.setFont("Helvetica", 11)
+    c.drawString(48, ph - 62, f"Period: {start_str}  →  {end_str}   |   Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.setFillColorRGB(0, 0, 0)
+
+    y = ph - 105
+
+    # ── KPI Summary ───────────────────────────────────────────────────────
+    y = section_header(y, "WEEKLY KPI SUMMARY")
+    kpi_rows = [
+        ("Total Person-Appearances",  total_persons),
+        ("Total Safe (no violation)", total_safe),
+        ("Total Violations",          total_violations),
+        ("Overall PPE Compliance",    f"{compliance_pct}%"),
+        ("No Helmet Violations",      total_no_helmet),
+        ("No Vest Violations",        total_no_vest),
+        ("Worst Day (most violations)",worst_day),
+        ("Total Frames Analyzed",     sum(day_stats[d]["frames"] for d in all_days)),
+    ]
+    c.setFont("Helvetica", 10)
+    for label, val in kpi_rows:
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(55, y, f"{label}:")
+        c.setFont("Helvetica", 10)
+        c.drawString(260, y, str(val))
+        y -= 16
+
+    y -= 8
+
+    # ── Day-by-Day Breakdown ──────────────────────────────────────────────
+    y = section_header(y, "DAY-BY-DAY BREAKDOWN")
+
+    # Table header
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColorRGB(0.9, 0.9, 0.9)
+    c.rect(40, y - 2, pw - 80, 16, fill=1, stroke=0)
+    c.setFillColorRGB(0, 0, 0)
+    cols = [55, 155, 245, 320, 395, 460]
+    headers = ["Date", "Persons", "Violations", "No Helmet", "No Vest", "Compliance%"]
+    for col, hdr in zip(cols, headers):
+        c.drawString(col, y + 2, hdr)
+    y -= 18
+
+    c.setFont("Helvetica", 9)
+    for i, day in enumerate(all_days):
+        s = day_stats[day]
+        persons    = s["persons"]
+        violations = s["violations"]
+        nh         = s["no_helmet"]
+        nv         = s["no_vest"]
+        comp       = f"{round((persons - violations) / persons * 100, 1)}%" if persons else "N/A"
+
+        # Alternate row shading
+        if i % 2 == 0:
+            c.setFillColorRGB(0.96, 0.96, 0.98)
+            c.rect(40, y - 3, pw - 80, 14, fill=1, stroke=0)
+            c.setFillColorRGB(0, 0, 0)
+
+        # Highlight worst day in red
+        if day == worst_day and violations > 0:
+            c.setFillColorRGB(0.8, 0.1, 0.1)
+
+        row = [day, persons, violations, nh, nv, comp]
+        for col, val in zip(cols, row):
+            c.drawString(col, y, str(val))
+        c.setFillColorRGB(0, 0, 0)
+        y -= 15
+
+        if y < 80:
+            c.showPage()
+            y = ph - 60
+            c.setFont("Helvetica", 9)
+
+    y -= 10
+
+    # ── Per-Camera Breakdown ──────────────────────────────────────────────
+    if y < 120:
+        c.showPage()
+        y = ph - 60
+
+    y = section_header(y, "PER-CAMERA WEEKLY BREAKDOWN")
+
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColorRGB(0.9, 0.9, 0.9)
+    c.rect(40, y - 2, pw - 80, 16, fill=1, stroke=0)
+    c.setFillColorRGB(0, 0, 0)
+    cam_cols = [55, 165, 265, 345, 425]
+    cam_headers = ["Camera", "Total Persons", "No Helmet", "No Vest", "Helmet Compliance%"]
+    for col, hdr in zip(cam_cols, cam_headers):
+        c.drawString(col, y + 2, hdr)
+    y -= 18
+
+    c.setFont("Helvetica", 9)
+    for i, (cam, s) in enumerate(sorted(cam_stats.items())):
+        persons = s["persons"]
+        nh      = s["no_helmet"]
+        nv      = s["no_vest"]
+        comp    = f"{round((persons - nh) / persons * 100, 1)}%" if persons else "N/A"
+
+        if i % 2 == 0:
+            c.setFillColorRGB(0.96, 0.96, 0.98)
+            c.rect(40, y - 3, pw - 80, 14, fill=1, stroke=0)
+            c.setFillColorRGB(0, 0, 0)
+
+        row = [cam, persons, nh, nv, comp]
+        for col, val in zip(cam_cols, row):
+            c.drawString(col, y, str(val))
+        y -= 15
+
+        if y < 80:
+            c.showPage()
+            y = ph - 60
+            c.setFont("Helvetica", 9)
+
+    # Footer
+    c.setFont("Helvetica", 8)
+    c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawString(48, 30, f"YOLOIntel Safety Dashboard  |  Report covers {start_str} to {end_str}  |  {len(results)} frames analyzed")
+
+    c.save()
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=weekly_safety_{start_str}_to_{end_str}.pdf"})
 # ═════════════════════════════════════════════════════════════════════════════
 # SSE LIVE STREAM
 # ═════════════════════════════════════════════════════════════════════════════
-
-
-
 @app.get("/api/stream")
 async def stream_updates(request: Request):
     async def event_generator():

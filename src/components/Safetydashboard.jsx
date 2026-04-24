@@ -1,191 +1,56 @@
 import { useEffect, useRef, useState } from 'react'
 import { Chart, registerables } from 'chart.js'
-import { useSSE } from '../hooks/useSSE'
-import { getPPECompliance, getCameras } from '../api'
+import { getCameras } from '../api'
+import LocationCameraPanel from './LocationCameraPanel'
 
 Chart.register(...registerables)
 
-function CameraFeed({ cam }) {
-  const videoRef    = useRef(null)
-  const hlsRef      = useRef(null)
-  const retryTimer  = useRef(null)
-  const watchdogRef = useRef(null)
-  const lastTime    = useRef(null)
-
-  useEffect(() => {
-    if (!cam.hls_url) return
-
-    function startWatchdog() {
-      clearInterval(watchdogRef.current)
-      lastTime.current = null
-      watchdogRef.current = setInterval(() => {
-        const video = videoRef.current
-        if (!video) return
-        const ct = video.currentTime
-        if (lastTime.current !== null && ct === lastTime.current) {
-          console.warn(`[${cam.id}] stream stalled at ${ct.toFixed(2)}s — reconnecting`)
-          clearInterval(watchdogRef.current)
-          clearTimeout(retryTimer.current)
-          retryTimer.current = setTimeout(attachHls, 1000)
-        }
-        lastTime.current = ct
-      }, 5000)
-    }
-
-    function attachHls() {
-      const video = videoRef.current
-      if (!video) return
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null }
-      const bustUrl = `${cam.hls_url}?t=${Date.now()}`
-
-      if (window.Hls && window.Hls.isSupported()) {
-        const hls = new window.Hls({
-          lowLatencyMode:            true,
-          enableWorker:              true,
-          backBufferLength:          0,
-          maxBufferLength:           10,
-          maxMaxBufferLength:        15,
-          manifestLoadingTimeOut:    10000,
-          manifestLoadingMaxRetry:   20,
-          manifestLoadingRetryDelay: 2000,
-          levelLoadingTimeOut:       10000,
-          levelLoadingMaxRetry:      20,
-          fragLoadingTimeOut:        10000,
-          fragLoadingMaxRetry:       20,
-          xhrSetup: (xhr) => {
-            xhr.setRequestHeader('Cache-Control', 'no-cache')
-            xhr.setRequestHeader('Pragma', 'no-cache')
-          },
-        })
-        hls.loadSource(bustUrl)
-        hls.attachMedia(video)
-        hlsRef.current = hls
-        hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch(() => {})
-          startWatchdog()
-        })
-        hls.on(window.Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) {
-            console.warn(`[${cam.id}] fatal HLS error — reconnecting in 4s`, data)
-            clearInterval(watchdogRef.current)
-            clearTimeout(retryTimer.current)
-            retryTimer.current = setTimeout(attachHls, 4000)
-          }
-        })
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = bustUrl
-        video.play().catch(() => {})
-        startWatchdog()
-      }
-    }
-
-    function attach() {
-      if (typeof window.Hls === 'undefined') {
-        if (!document.querySelector('script[data-hls]')) {
-          const script = document.createElement('script')
-          script.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js'
-          script.setAttribute('data-hls', '1')
-          script.onload = attachHls
-          document.head.appendChild(script)
-        } else {
-          retryTimer.current = setTimeout(attach, 500)
-        }
-      } else {
-        attachHls()
-      }
-    }
-
-    const video = videoRef.current
-    const onStall = () => {
-      console.warn(`[${cam.id}] native stall/error detected — reconnecting in 3s`)
-      clearInterval(watchdogRef.current)
-      clearTimeout(retryTimer.current)
-      retryTimer.current = setTimeout(attachHls, 3000)
-    }
-    video?.addEventListener('stalled', onStall)
-    video?.addEventListener('error',   onStall)
-    attach()
-
-    return () => {
-      clearInterval(watchdogRef.current)
-      clearTimeout(retryTimer.current)
-      video?.removeEventListener('stalled', onStall)
-      video?.removeEventListener('error',   onStall)
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null }
-    }
-  }, [cam.hls_url])
-
-  return (
-    <div className="camera-feed">
-      <video
-        ref={videoRef}
-        autoPlay muted playsInline
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-      />
-      <div className="cam-overlay">
-        <div className="cam-top">
-          <div className="cam-id">{cam.id}</div>
-          <div className={`cam-status ${cam.ready ? 'live' : 'offline'}`}>
-            {cam.ready ? '● REC' : '○ WAIT'}
-          </div>
-        </div>
-        <div className="cam-bottom">
-          <div className="cam-zone">HLS STREAM</div>
-          <div className="cam-fps">{cam.ready ? 'LIVE' : 'STARTING...'}</div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function SafetyDashboard() {
+export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kpi }) {
   const chartRef  = useRef(null)
   const chartInst = useRef(null)
-
-  const { kpi, alerts: liveAlerts } = useSSE()
 
   const [cameras,       setCameras]       = useState([])
   const [compliance,    setCompliance]    = useState({ helmet: 0, vest: 0 })
   const [trendData,     setTrendData]     = useState(null)
   const [ackedIds,      setAckedIds]      = useState(new Set())
-  const [selectedDate,  setSelectedDate]  = useState(new Date().toISOString().split('T')[0])
   const [selectedShift, setSelectedShift] = useState('day')
   const [daySafe,       setDaySafe]       = useState(0)
   const [dayViolated,   setDayViolated]   = useState(0)
+  const [isLoading,     setIsLoading]     = useState(false)
 
-  // ── fetch trend + compliance when date or shift changes ───────────────────
+  // ── fetch trend + compliance in parallel when date or shift changes ────────
   useEffect(() => {
-    setDaySafe(0)
-    setDayViolated(0)
     setTrendData(null)
+    setIsLoading(true)
 
     const params = new URLSearchParams({ date: selectedDate, shift: selectedShift })
-    fetch(`/api/hourly-trend?${params}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`hourly-trend ${r.status}`)
-        return r.json()
-      })
-      .then(data => {
-        // Guard: API must return an array — reject objects like {"detail":"Not Found"}
-        const safe = Array.isArray(data) ? data : []
+
+    Promise.all([
+      fetch(`/api/hourly-trend?${params}`)
+        .then(r => r.ok ? r.json() : []),
+      fetch(`/api/ppe-compliance-summary?date=${selectedDate}`)
+        .then(r => r.ok ? r.json() : {}),
+    ])
+      .then(([trendRaw, complianceRaw]) => {
+        const safe = Array.isArray(trendRaw) ? trendRaw : []
         setTrendData(safe)
         if (safe.length > 0) {
           setDaySafe(safe.reduce((s, d) => s + (d.workers_active || 0), 0))
           setDayViolated(safe.reduce((s, d) => s + (d.violations || 0), 0))
+        } else {
+          setDaySafe(0)
+          setDayViolated(0)
         }
+        setCompliance({
+          helmet: complianceRaw.helmet ?? 0,
+          vest:   complianceRaw.vest   ?? 0,
+        })
+        setIsLoading(false)
       })
       .catch(err => {
-        console.error('[SafetyDashboard] hourly-trend error:', err)
-        setTrendData([])   // ensure it stays an array so .map() never crashes
-      })
-
-    fetch(`/api/ppe-compliance-summary?date=${selectedDate}`)
-      .then(r => r.json())
-      .then(d => setCompliance({ helmet: d.helmet ?? 0, vest: d.vest ?? 0 }))
-      .catch(() => {
-        getPPECompliance(selectedDate)
-          .then(d => setCompliance({ helmet: d.helmet ?? 0, vest: d.vest ?? 0 }))
-          .catch(() => {})
+        console.error('[SafetyDashboard] fetch error:', err)
+        setTrendData([])
+        setIsLoading(false)
       })
   }, [selectedDate, selectedShift])
 
@@ -197,23 +62,17 @@ export default function SafetyDashboard() {
     return () => clearInterval(id)
   }, [])
 
-  // ── chart ─────────────────────────────────────────────────────────────────
-  // Two lines on a single Y-axis (count):
-  //   • Compliance     = workers_safe  (green, solid)
-  //   • Non-compliance = violations    (red, dashed)
-  // Each point is the MAX value observed in that hour from the API.
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── chart ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!chartRef.current) return
     if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null }
     if (!trendData || trendData.length === 0) return
 
-    // Pad single-point data so the chart draws a curve, not just a dot
     let chartData = trendData
     if (trendData.length === 1) {
       const hour     = trendData[0].hour.split(':')[0]
       const prevHour = `${String(Math.max(0,  parseInt(hour) - 1)).padStart(2, '0')}:00`
-      const nextHour = `${String(Math.min(23, parseInt(hour) + 1)).padStart(2, '00')}:00`
+      const nextHour = `${String(Math.min(23, parseInt(hour) + 1)).padStart(2, '0')}:00`
       chartData = [
         { hour: prevHour, workers_active: 0, violations: 0 },
         ...trendData,
@@ -222,13 +81,11 @@ export default function SafetyDashboard() {
     }
 
     const ctx = chartRef.current.getContext('2d')
-
     chartInst.current = new Chart(ctx, {
       type: 'line',
       data: {
         labels: chartData.map(d => d.hour),
         datasets: [
-          // ── Compliance (safe workers) ─────────────────────────────────────
           {
             label:                'Total Workers',
             data:                 chartData.map(d => d.workers_active),
@@ -239,9 +96,7 @@ export default function SafetyDashboard() {
             pointRadius:          4,
             pointBackgroundColor: '#22c55e',
             borderWidth:          2.5,
-            // solid line — no borderDash
           },
-          // ── Non-compliance (violations) ───────────────────────────────────
           {
             label:                'Violations',
             data:                 chartData.map(d => d.violations),
@@ -252,7 +107,7 @@ export default function SafetyDashboard() {
             pointRadius:          4,
             pointBackgroundColor: '#e53e3e',
             borderWidth:          2.5,
-            borderDash:           [5, 3],   // dashed so color isn't the only differentiator
+            borderDash:           [5, 3],
           },
         ],
       },
@@ -261,9 +116,17 @@ export default function SafetyDashboard() {
         maintainAspectRatio: false,
         interaction:         { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },   // custom legend rendered in JSX below
+          legend: { display: false },
           tooltip: {
             callbacks: {
+              // Show range in title e.g. "12:00 – 13:00" instead of just "12:00"
+              title: (items) => {
+                if (!items.length) return ''
+                const label = items[0].label  // e.g. "12:00"
+                const hour  = parseInt(label.split(':')[0])
+                const next  = String(hour + 1).padStart(2, '0')
+                return `${label} – ${next}:00`
+              },
               label: (ctx) => {
                 const suffix = ctx.dataset.label === 'Violations' ? ' violations' : ' workers (total)'
                 return ` ${ctx.dataset.label}: ${ctx.parsed.y}${suffix}`
@@ -276,7 +139,6 @@ export default function SafetyDashboard() {
             ticks: { color: '#5a6a82', autoSkip: false, maxRotation: 45 },
             grid:  { color: 'rgba(255,255,255,0.04)' },
           },
-          // Single shared Y-axis — count
           y: {
             beginAtZero: true,
             ticks: { color: '#a0aec0', font: { size: 11 } },
@@ -294,20 +156,23 @@ export default function SafetyDashboard() {
 
   // ── helpers ────────────────────────────────────────────────────────────────
   const ackAlert      = (id) => setAckedIds(prev => new Set([...prev, id]))
-  const visibleAlerts = liveAlerts.filter(a =>
+  const visibleAlerts = (alerts || []).filter(a =>
     !ackedIds.has(a._id) && a.timestamp?.startsWith(selectedDate)
   )
-  const unacked         = visibleAlerts.length
-  const compColor       = (pct) => pct >= 90 ? 'var(--green-safe)' : pct >= 75 ? 'var(--amber)' : 'var(--red-alert)'
-  const displaySafe     = daySafe
-  const displayViolated = dayViolated
-  const displayTotal    = displaySafe + displayViolated
+  const unacked           = visibleAlerts.length
+  const compColor         = (pct) => pct >= 90 ? 'var(--green-safe)' : pct >= 75 ? 'var(--amber)' : 'var(--red-alert)'
+  const displaySafe       = daySafe
+  const displayViolated   = dayViolated
+  const displayTotal      = displaySafe + displayViolated
+  const isToday           = selectedDate === new Date().toISOString().split('T')[0]
+  const displayCompliance = displayTotal > 0
+    ? Math.round((displaySafe / displayTotal) * 100)
+    : null
 
-  // peak stats
   const maxSafe       = trendData ? Math.max(...trendData.map(d => d.workers_active), 0) : 0
-  const maxViolations = trendData ? Math.max(...trendData.map(d => d.violations),   0) : 0
+  const maxViolations = trendData ? Math.max(...trendData.map(d => d.violations),     0) : 0
   const maxSHour      = trendData?.find(d => d.workers_active === maxSafe)?.hour     || '--'
-  const maxVHour      = trendData?.find(d => d.violations   === maxViolations)?.hour || '--'
+  const maxVHour      = trendData?.find(d => d.violations     === maxViolations)?.hour || '--'
 
   const cameraSlots = cameras.length > 0
     ? cameras.slice(0, 4)
@@ -318,27 +183,39 @@ export default function SafetyDashboard() {
         { id: 'CAM-A07', hls_url: '/hls/CAM-A07/stream.m3u8', ready: false },
       ]
 
-  return (
+    return (
     <div className="screen active" id="screen-safety-dashboard">
-
-      {/* ── DATE BAR ── */}
-      <div className="date-bar">
-        <span className="date-bar-label">📅 Viewing data for:</span>
-        <input
-          type="date"
-          className="date-picker"
-          value={selectedDate}
-          onChange={e => setSelectedDate(e.target.value)}
-        />
-        <span className="date-bar-hint">← change date to update all stats</span>
+    {/* 1. CAMERAS — responsive resizable grid */}
+    <div className="panel" style={{ marginBottom: 16 }}>
+      <div className="panel-header">
+        <div className="panel-title">📹 Live Camera Grid</div>
       </div>
+      <div className="panel-body">
+        <LocationCameraPanel cameras={cameras} />
+      </div>
+    </div>
 
-      {/* ── KPI CARDS ── */}
-      <div className="stat-grid">
+    {/* 2. DATE BAR */}
+    <div className="date-bar">
+      <span className="date-bar-label">📅 Viewing data for:</span>
+      <input
+        type="date"
+        className="date-picker"
+        value={selectedDate}
+        onChange={e => onDateChange(e.target.value)}
+      />
+      <span className="date-bar-hint">← change date to update all stats</span>
+    </div>
+
+    {/* 3. KPI CARDS (left) + ACTIVE ALERTS (right) */}
+    <div className="grid-60-40" style={{ marginBottom: 16 }}>
+
+      {/* 4 KPI boxes */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         <div className="stat-card green">
           <div className="stat-icon">👷</div>
           <div className="stat-label">Workers Safe On-Site</div>
-          <div className="stat-value green">{displaySafe}</div>
+          <div className="stat-value green">{isLoading ? '…' : displaySafe}</div>
           <div className="stat-delta">
             <span className="up">{displaySafe}</span> safe ·{' '}
             <span style={{ color: 'var(--red-alert)' }}>{displayViolated}</span> violated
@@ -347,104 +224,62 @@ export default function SafetyDashboard() {
 
         <div className="stat-card red">
           <div className="stat-icon">🚨</div>
-          <div className="stat-label">Active Violations</div>
-          <div className="stat-value red">{displayViolated}</div>
-          <div className="stat-delta">
-            <span className="down">{kpi.critical_alerts ?? 0}</span> critical ·{' '}
-            {kpi.warning_alerts ?? 0} warnings
-          </div>
+          <div className="stat-label"> Max Violations</div>
+          <div className="stat-value red">{isLoading ? '…' : displayViolated}</div>
+          <div className="stat-delta"></div>
         </div>
 
         <div className="stat-card amber">
           <div className="stat-icon">🦺</div>
           <div className="stat-label">PPE Compliance</div>
-          <div className="stat-value amber">{kpi.compliance_pct ?? 100}%</div>
+          <div className="stat-value amber">{isLoading ? '…' : displayCompliance !== null ? `${displayCompliance}%` : '—'}</div>
           <div className="stat-delta">Shift average · All cameras</div>
         </div>
-
-        <div className="stat-card blue">
-          <div className="stat-icon">📹</div>
-          <div className="stat-label">Camera Streams</div>
-          <div className="stat-value blue">{cameras.filter(c => c.ready).length}</div>
-          <div className="stat-delta">
-            <span className="up">{cameras.filter(c => c.ready).length} Live</span> ·{' '}
-            {cameras.filter(c => !c.ready).length} Starting
-          </div>
-        </div>
       </div>
 
-      {/* ── CAMERA GRID + ALERTS ── */}
-      <div className="grid-60-40" style={{ marginBottom: 16 }}>
-        <div className="panel">
-          <div className="panel-header">
-            <div className="panel-title">📹 Live Camera Grid</div>
-            <div className="panel-actions">
-              <button className="topbar-btn" style={{ padding: '4px 8px', fontSize: 11 }}>Grid 2×2</button>
-              <button className="topbar-btn" style={{ padding: '4px 8px', fontSize: 11 }}>Fullscreen</button>
+      {/* Active alerts */}
+      <div className="panel" style={{ display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-header">
+          <div className="panel-title">🔔 Active Alerts</div>
+          <div className="panel-subtitle">{unacked} unacknowledged</div>
+        </div>
+        <div className="panel-body" style={{ flex: 1, overflowY: 'auto', maxHeight: 380 }}>
+          {visibleAlerts.length === 0 ? (
+            <div className="text-xs text-muted" style={{ padding: '12px 0' }}>
+              No active alerts — waiting for live data…
             </div>
-          </div>
-          <div className="panel-body">
-            <div className="camera-grid">
-              {cameraSlots.map(cam => (
-                <CameraFeed key={cam.id} cam={cam} />
+          ) : (
+            <div className="alert-feed">
+              {visibleAlerts.map(a => (
+                <div key={a._id} className={`alert-item ${
+                  a.severity === 'critical' ? 'critical' :
+                  a.severity === 'warning'  ? 'warning'  : 'info'
+                }`}>
+                  <div className="alert-dot" />
+                  <div className="alert-content">
+                    <div className="alert-type">
+                      {a.severity?.toUpperCase()} — {a.type?.replace('_', ' ')}
+                    </div>
+                    <div className="alert-msg">{a.message}</div>
+                    <div className="alert-meta">
+                      📹 {a.camera} · Worker {a.worker_id} ·{' '}
+                      {new Date(a.timestamp).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
-          </div>
-        </div>
-
-        <div className="panel" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="panel-header">
-            <div className="panel-title">🔔 Active Alerts</div>
-            <div className="panel-subtitle">{unacked} unacknowledged</div>
-          </div>
-          <div className="panel-body" style={{ flex: 1, overflowY: 'auto', maxHeight: 380 }}>
-            {visibleAlerts.length === 0 ? (
-              <div className="text-xs text-muted" style={{ padding: '12px 0' }}>
-                No active alerts — waiting for live data…
-              </div>
-            ) : (
-              <div className="alert-feed">
-                {visibleAlerts.map(a => (
-                  <div
-                    key={a._id}
-                    className={`alert-item ${
-                      a.severity === 'critical' ? 'critical' :
-                      a.severity === 'warning'  ? 'warning'  : 'info'
-                    }`}
-                  >
-                    <div className="alert-dot" />
-                    <div className="alert-content">
-                      <div className="alert-type">
-                        {a.severity?.toUpperCase()} — {a.type?.replace('_', ' ')}
-                      </div>
-                      <div className="alert-msg">{a.message}</div>
-                      <div className="alert-meta">
-                        📹 {a.camera} · Worker {a.worker_id} ·{' '}
-                        {new Date(a.timestamp).toLocaleTimeString()}
-                      </div>
-                    </div>
-                    <button
-                      className="alert-ack"
-                      style={{ color: 'var(--green-safe)', borderColor: 'rgba(34,197,94,0.3)' }}
-                      onClick={() => ackAlert(a._id)}
-                    >
-                      ✓ ACK
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
+    </div>
       {/* ── HOURLY TREND CHART ── */}
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div className="panel-title">📈 Total Workers vs Violations — Hourly Trend</div>
           <div className="panel-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
 
-            {/* ── Inline legend ── */}
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
                 <span style={{ display: 'inline-block', width: 22, height: 3, background: '#22c55e', borderRadius: 2 }} />
@@ -475,6 +310,7 @@ export default function SafetyDashboard() {
               <option value="day">☀️ Day Shift (06:00–18:00)</option>
               <option value="night">🌙 Night Shift (18:00–06:00)</option>
             </select>
+
             <div className="panel-subtitle" style={{ margin: 0 }}>
               {selectedShift === 'day' ? 'Day' : 'Night'} Shift · {selectedDate}
             </div>
@@ -482,8 +318,6 @@ export default function SafetyDashboard() {
         </div>
 
         <div className="panel-body">
-
-          {/* Peak stats bar */}
           {trendData && trendData.length > 0 && (
             <div style={{
               display:      'flex',
@@ -524,7 +358,12 @@ export default function SafetyDashboard() {
                 opacity:  trendData && trendData.length > 0 ? 1 : 0,
               }}
             />
-            {(!trendData || trendData.length === 0) && (
+            {isLoading && (
+              <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
+                Loading data for {selectedDate}…
+              </div>
+            )}
+            {!isLoading && (!trendData || trendData.length === 0) && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
                 No data for {selectedShift === 'day' ? 'Day' : 'Night'} Shift · {selectedDate}
               </div>
@@ -623,7 +462,7 @@ export default function SafetyDashboard() {
               </div>
               {(!trendData || trendData.length === 0) && (
                 <div className="text-xs text-muted" style={{ marginTop: 8 }}>
-                  No trend data for {selectedDate}
+                  {isLoading ? 'Loading…' : `No trend data for ${selectedDate}`}
                 </div>
               )}
               <div className="text-xs text-muted" style={{ marginTop: 4 }}>

@@ -142,10 +142,12 @@ export function getDailyReport(date) {
  * @param {string} [date]
  * Returns [{hour, workers_active, workers_safe, violations}, ...]
  */
-export function getHourlyTrend(date) {
-  return get(`/hourly-trend${date ? `?date=${date}` : ''}`)
+export function getHourlyTrend(date, shift = 'day') {
+  const params = new URLSearchParams()
+  if (date)  params.set('date',  date)
+  if (shift) params.set('shift', shift)
+  return get(`/hourly-trend?${params}`)
 }
-
 // ─── SSE live stream ─────────────────────────────────────────────────────────
 
 /**

@@ -91,34 +91,39 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
  
 COLLAGE_PROMPT = """This image is a grid of construction worker crops.
-Each cell shows ONE worker. The label at the bottom of each cell
-identifies the person (e.g. Img1-P1, Img2-P3, etc.).
+Each cell shows ONE worker. The label is at the bottom of each cell.
  
 For EVERY visible person apply these rules:
  
-HELMET RULES:
-- helmet:true ONLY if hard hat (YELLOW or BLUE) is physically ON their head
-- YELLOW helmet: bright yellow/lime round shape ON top of head
-- BLUE helmet: dark round HARD SHELL shape ON head — NOT hair
-- BALD PERSON: if no yellow/blue colored hard shell visible = false
-- REAR/SIDE VIEW: colored round shape on top of head = true
-- helmet:false if bare head, hair only, helmet held in hand or hanging
-- DO NOT assume helmet just because worker has vest
+HELMET DETECTION — THE ONLY RULE THAT MATTERS:
+Look at the TOP OF THE HEAD AREA of each person.
+ 
+  helmet:true  → if you see ANY of these colors on/above the head:
+                 YELLOW, LIME GREEN, BLUE, ORANGE, WHITE, RED, PURPLE
+                 Even partial, blurry, or rear-view colored shape = true
+ 
+  helmet:false → if the top of the head is:
+                 DARK (black/brown hair), BARE SKIN, or NO COLOR visible
+                 A dark round head shape with no colored hat = false
+ 
+  THE KEY QUESTION: "Is there a non-dark colored shape on this person's head?"
+  YES → helmet:true
+  NO  → helmet:false
  
 VEST RULES:
-- vest:true ONLY if bright ORANGE or YELLOW reflective vest clearly ON body
-- Vest must clearly cover torso — not just a small patch of orange
-- vest:false if plain shirt, dark clothes, no orange/yellow vest visible
+- vest:true if ORANGE or GREEN reflective vest is visible ANYWHERE on the body
+- This includes front, sides, edges, shoulders, or partial view of vest
+- vest:false ONLY if entire visible torso shows plain dark/neutral clothing with NO orange or GREEN anywhere
 - vest:false if uncertain
+RULE: Base your answer ONLY on visible color at head and torso.
+Do not overthink — just check: colored head? colored torso?
  
-Return ONLY a JSON array — no markdown, no explanation — one object per person:
+Return ONLY a JSON array:
 [
   {"label":"Img1-P1","helmet":true,"vest":true},
-  {"label":"Img1-P2","helmet":false,"vest":true},
   ...
 ]
-Skip any blank/empty cells. Include ALL visible persons."""
- 
+Skip blank cells. Include ALL visible persons."""
  
 # ══════════════════════════════════════════════════════════════════════════════
 #  TERMINAL PRINT HELPERS

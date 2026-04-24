@@ -101,7 +101,7 @@ export default function Sidebar({ activeTab, setActiveTab, alerts }) {
             <div className="avatar">RS</div>
             {!collapsed && (
               <div className="user-info">
-                <div className="name">Raj Singh</div>
+                <div className="name">Alphaleo</div>
                 <div className="role">Safety Officer</div>
               </div>
             )}
