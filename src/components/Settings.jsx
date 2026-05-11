@@ -1,3 +1,4 @@
+
 import { useState } from 'react'
 import { useUser, USERS, ALL_LOCATION_IDS, CAMERA_LOCATIONS } from './UserContext'
 
@@ -31,8 +32,68 @@ const SETTINGS_CSS = `
   padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700;
   letter-spacing: 0.05em; font-family: monospace;
 }
-.role-badge.admin { background: rgba(59,130,246,0.2); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
-.role-badge.user  { background: rgba(100,116,139,0.2); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
+.role-badge.admin    { background: rgba(59,130,246,0.2); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
+.role-badge.user     { background: rgba(100,116,139,0.2); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
+.role-badge.site-mgr { background: rgba(168,85,247,0.2); color: #c4b5fd; border: 1px solid rgba(168,85,247,0.3); }
+
+.site-manager-card {
+  border-color: rgba(168,85,247,0.35) !important;
+  background: rgba(168,85,247,0.05) !important;
+}
+.sm-email-tag {
+  margin-left: auto; font-size: 10px; font-family: monospace;
+  background: rgba(168,85,247,0.15); color: #c4b5fd;
+  border: 1px solid rgba(168,85,247,0.3); padding: 2px 8px; border-radius: 10px;
+}
+.sm-send-btn {
+  margin-left: 8px; padding: 4px 10px; border-radius: 5px; border: none;
+  font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  font-family: monospace; letter-spacing: 0.04em;
+  background: rgba(168,85,247,0.2); color: #c4b5fd; border: 1px solid rgba(168,85,247,0.3);
+}
+.sm-send-btn:hover { background: rgba(168,85,247,0.4); }
+
+/* Email modal */
+.sm-modal-backdrop {
+  position: fixed; inset: 0; z-index: 99999;
+  background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+}
+.sm-modal {
+  background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+  width: 460px; padding: 24px; position: relative;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+}
+.sm-modal-title { font-size: 15px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
+.sm-modal-sub   { font-size: 11px; color: #64748b; margin-bottom: 18px; }
+.sm-field-label { font-size: 10px; color: #64748b; font-family: monospace; letter-spacing: 0.06em; margin-bottom: 4px; text-transform: uppercase; }
+.sm-input {
+  width: 100%; background: rgba(255,255,255,0.05); border: 1px solid #334155;
+  border-radius: 6px; padding: 7px 12px; color: #f1f5f9; font-size: 12px;
+  margin-bottom: 12px; outline: none; font-family: inherit;
+}
+.sm-input:focus { border-color: #a855f7; }
+.sm-textarea {
+  width: 100%; background: rgba(255,255,255,0.05); border: 1px solid #334155;
+  border-radius: 6px; padding: 7px 12px; color: #f1f5f9; font-size: 12px;
+  margin-bottom: 12px; outline: none; resize: vertical; min-height: 90px;
+  font-family: inherit;
+}
+.sm-textarea:focus { border-color: #a855f7; }
+.sm-check-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px; margin-bottom: 6px; cursor: pointer;
+}
+.sm-check-row input { accent-color: #a855f7; margin-top: 2px; cursor: pointer; }
+.sm-check-label { font-size: 12px; color: #e2e8f0; }
+.sm-check-sub   { font-size: 10px; color: #475569; margin-top: 1px; }
+.sm-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; padding-top: 14px; border-top: 1px solid #334155; }
+.sm-btn-cancel { background: transparent; border: 1px solid #334155; color: #94a3b8; padding: 7px 18px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.sm-btn-cancel:hover { background: rgba(255,255,255,0.05); }
+.sm-btn-send { background: #7c3aed; border: none; color: #fff; padding: 7px 18px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.sm-btn-send:hover { background: #8b5cf6; }
+.sm-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); border-radius: 6px; padding: 10px 14px; color: #4ade80; font-size: 12px; margin-top: 12px; }
 
 .user-card {
   display: flex; align-items: center; gap: 12px;
@@ -133,6 +194,68 @@ export default function Settings() {
 
   const { currentUser, setCurrentUser, isAdmin, users, toggleUserLocation } = useUser()
   const [activeNav, setActiveNav] = useState('Users & Access')
+  const [emailOpen, setEmailOpen] = useState(false)
+  const [emailSent, setEmailSent] = useState(false)
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailSubject, setEmailSubject] = useState('Shift Handover Report — YOLOIntel Construction Site')
+  const [emailBody, setEmailBody] = useState('Hi,\n\nPlease find attached the latest Shift Handover Report.\n\nRegards,\nYOLOIntel Admin')
+  const [attachPDF, setAttachPDF] = useState(true)
+  const [attachKPI, setAttachKPI] = useState(true)
+  const [attachViolations, setAttachViolations] = useState(false)
+
+  const SITE_MANAGER = { name: 'Alphaleo Databricks', email: 'alphaleodatabricks@gmail.com', avatar: 'AL' }
+
+
+  async function handleSendEmail() {
+
+    setEmailSending(true)
+
+    try {
+
+      const res = await fetch('http://localhost:5000/api/send-email', {
+
+        method: 'POST',
+
+        headers: { 'Content-Type': 'application/json' },
+
+        body: JSON.stringify({
+
+          to:      'alphaleodatabricks@gmail.com',
+
+          subject: emailSubject,
+
+          message: emailBody,
+
+        })
+
+      })
+
+      const data = await res.json()
+
+      if (data.ok) {
+
+        setEmailSending(false)
+
+        setEmailSent(true)
+
+        setTimeout(() => { setEmailOpen(false); setEmailSent(false) }, 2000)
+
+      } else {
+
+        throw new Error(data.error)
+
+      }
+
+    } catch (err) {
+
+      setEmailSending(false)
+
+      alert('Failed to send email: ' + err.message)
+
+    }
+
+  }
+ 
 
   const handleSwitch = (user) => setCurrentUser(user)
   const allUsers = [...(users?.admin || []), ...(users?.users || [])]
@@ -211,6 +334,25 @@ export default function Settings() {
                         </div>
                       )
                     })}
+                  </div>
+
+                  {/* Site Manager block */}
+                  <div className="role-block">
+                    <div className="role-block-header">
+                      <span className="role-badge site-mgr">SITE MANAGER</span>
+                      <span>Report notifications · Handover emails</span>
+                    </div>
+                    <div className="user-card site-manager-card">
+                      <div className="user-avatar" style={{ background: 'rgba(168,85,247,0.25)', color: '#c4b5fd' }}>AL</div>
+                      <div>
+                        <div className="user-name">Alphaleo Databricks</div>
+                        <div className="user-role">alphaleodatabricks@gmail.com · Receives PDF reports</div>
+                      </div>
+                      <span className="sm-email-tag">📧 Notify on report</span>
+                      <button className="sm-send-btn" onClick={() => { setEmailOpen(true); setEmailSent(false) }}>
+                        Send Report
+                      </button>
+                    </div>
                   </div>
 
                   {/* Users block */}
@@ -319,6 +461,54 @@ export default function Settings() {
           </div>
         </div>
       </div>
+
+      {/* ── Email Modal ── */}
+      {emailOpen && (
+        <div className="sm-modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setEmailOpen(false) }}>
+          <div className="sm-modal">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <div style={{ background: 'rgba(168,85,247,0.2)', width: 36, height: 36, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📧</div>
+              <div>
+                <div className="sm-modal-title">Send Report to Site Manager</div>
+                <div className="sm-modal-sub">Alphaleo Databricks · alphaleodatabricks@gmail.com</div>
+              </div>
+              <button onClick={() => setEmailOpen(false)} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #334155', borderRadius: 6, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(168,85,247,0.25)', color: '#c4b5fd', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0 }}>AL</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>Alphaleo Databricks</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>alphaleodatabricks@gmail.com</div>
+              </div>
+              <span style={{ background: 'rgba(168,85,247,0.15)', color: '#c4b5fd', fontSize: 10, padding: '2px 8px', borderRadius: 10, border: '1px solid rgba(168,85,247,0.3)', fontFamily: 'monospace' }}>Site Manager</span>
+            </div>
+            <div className="sm-field-label">Subject</div>
+            <input className="sm-input" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} />
+            <div className="sm-field-label">Message</div>
+            <textarea className="sm-textarea" value={emailBody} onChange={e => setEmailBody(e.target.value)} />
+            <div className="sm-field-label">Include in email</div>
+            <label className="sm-check-row">
+              <input type="checkbox" checked={attachPDF} onChange={e => setAttachPDF(e.target.checked)} />
+              <div><div className="sm-check-label">Attach PDF report</div><div className="sm-check-sub">Full shift handover document</div></div>
+            </label>
+            <label className="sm-check-row">
+              <input type="checkbox" checked={attachKPI} onChange={e => setAttachKPI(e.target.checked)} />
+              <div><div className="sm-check-label">Include KPI summary</div><div className="sm-check-sub">Cameras, workers, PPE, alerts snapshot</div></div>
+            </label>
+            <label className="sm-check-row">
+              <input type="checkbox" checked={attachViolations} onChange={e => setAttachViolations(e.target.checked)} />
+              <div><div className="sm-check-label">Include violation log</div><div className="sm-check-sub">Full list of PPE violations</div></div>
+            </label>
+            {emailSent && <div className="sm-success">✅ Report sent to alphaleodatabricks@gmail.com</div>}
+            <div className="sm-modal-actions">
+              <button className="sm-btn-cancel" onClick={() => setEmailOpen(false)}>Cancel</button>
+              <button className="sm-btn-send" onClick={handleSendEmail} disabled={emailSending}>
+                {emailSending ? '⏳ Sending...' : '📤 Send Report'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

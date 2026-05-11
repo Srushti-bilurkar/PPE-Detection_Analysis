@@ -395,6 +395,9 @@ export default function Topbar({
   const [handovering,    setHandovering]    = useState(false)
   const [handoverOpen,   setHandoverOpen]   = useState(false)
   const [handoverDate,   setHandoverDate]   = useState(todayISO())
+  const [handoverEmailOpen, setHandoverEmailOpen] = useState(false)
+  const [handoverEmailSent, setHandoverEmailSent] = useState(false)
+  const [handoverEmailSending, setHandoverEmailSending] = useState(false)
   const [summaryOpen,    setSummaryOpen]    = useState(false)
   const [summaryDate,    setSummaryDate]    = useState(todayISO())
   const [summaryData,    setSummaryData]    = useState(null)
@@ -469,6 +472,44 @@ export default function Topbar({
   }
   setTimeout(() => setHandovering(false), 1500)
 }
+
+  async function sendHandoverEmail() {
+    setHandoverEmailSending(true)
+    try {
+      // ── Build the report HTML (same as PDF) ──
+      const reportHTML = buildHandoverHTML({
+        alerts,
+        kpi,
+        activeTab,
+        zones,
+        handoverDate,
+        siteName,
+      })
+
+      const res = await fetch('http://localhost:5000/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to:         'alphaleodatabricks@gmail.com',
+          subject:    `Shift Handover Report — ${handoverDate} · YOLOIntel`,
+          message:    `Hi Alphaleo,\n\nThe Shift Handover Report for ${handoverDate} is ready. Please find the PDF attached.\n\nRegards,\nYOLOIntel Admin`,
+          reportHTML: reportHTML,   // ← send the HTML to backend
+        })
+      })
+
+      const data = await res.json()
+      if (data.ok) {
+        setHandoverEmailSending(false)
+        setHandoverEmailSent(true)
+        setTimeout(() => { setHandoverEmailOpen(false); setHandoverEmailSent(false) }, 2000)
+      } else {
+        throw new Error(data.error)
+      }
+    } catch (err) {
+      setHandoverEmailSending(false)
+      alert('Failed to send email: ' + err.message)
+    }
+  }
 
   async function fetchSummaryForDate(date) {
     setSummaryLoading(true)
@@ -753,6 +794,17 @@ export default function Topbar({
                   }}
                 >✕</button>
               </div>
+              <button
+                onClick={() => { setHandoverEmailOpen(true); setHandoverEmailSent(false); setHandoverOpen(false) }}
+                style={{
+                  width: '100%', marginTop: 8, background: 'rgba(168,85,247,0.18)',
+                  border: '1px solid rgba(168,85,247,0.35)', borderRadius: 6,
+                  padding: '7px 0', color: '#c4b5fd', fontSize: 12,
+                  fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                📧 Email to Site Manager
+              </button>
             </div>
           )}
         </div>
@@ -1007,6 +1059,70 @@ export default function Topbar({
           }}>
             <span style={{ fontSize: '10px', color: '#475569' }}>YOLOIntel · {siteName}</span>
             <span style={{ fontSize: '10px', color: '#475569' }}>{summaryDate}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Handover Email Modal ── */}
+      {handoverEmailOpen && (
+        <div
+          onClick={e => { if (e.target === e.currentTarget) setHandoverEmailOpen(false) }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 99999,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div style={{
+            background: '#1e293b', border: '1px solid #334155', borderRadius: 12,
+            width: 440, padding: 24, boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <div style={{ background: 'rgba(168,85,247,0.2)', width: 36, height: 36, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📧</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>Send Report to Site Manager</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>Shift Handover · {handoverDate}</div>
+              </div>
+              <button onClick={() => setHandoverEmailOpen(false)} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid #334155', borderRadius: 6, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(168,85,247,0.25)', color: '#c4b5fd', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0 }}>AL</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>Alphaleo Databricks</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>alphaleodatabricks@gmail.com</div>
+              </div>
+              <span style={{ background: 'rgba(168,85,247,0.15)', color: '#c4b5fd', fontSize: 10, padding: '2px 8px', borderRadius: 10, border: '1px solid rgba(168,85,247,0.3)', fontFamily: 'monospace' }}>Site Manager</span>
+            </div>
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', letterSpacing: '0.06em', marginBottom: 4, textTransform: 'uppercase' }}>Subject</div>
+            <input
+              value={`Shift Handover Report — ${handoverDate} · YOLOIntel`}
+              readOnly
+              style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid #334155', borderRadius: 6, padding: '7px 12px', color: '#f1f5f9', fontSize: 12, marginBottom: 12, outline: 'none', fontFamily: 'inherit' }}
+            />
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', letterSpacing: '0.06em', marginBottom: 4, textTransform: 'uppercase' }}>Message</div>
+            <textarea
+              defaultValue={`Hi,\n\nPlease find attached the Shift Handover Report for ${handoverDate}.\n\nRegards,\nYOLOIntel Admin`}
+              style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid #334155', borderRadius: 6, padding: '7px 12px', color: '#f1f5f9', fontSize: 12, marginBottom: 12, outline: 'none', resize: 'vertical', minHeight: 80, fontFamily: 'inherit' }}
+            />
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, marginBottom: 6, cursor: 'pointer' }}>
+              <input type="checkbox" defaultChecked style={{ accentColor: '#a855f7', marginTop: 2 }} />
+              <div><div style={{ fontSize: 12, color: '#e2e8f0' }}>Attach PDF report</div><div style={{ fontSize: 10, color: '#475569' }}>Full shift handover document</div></div>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, marginBottom: 6, cursor: 'pointer' }}>
+              <input type="checkbox" defaultChecked style={{ accentColor: '#a855f7', marginTop: 2 }} />
+              <div><div style={{ fontSize: 12, color: '#e2e8f0' }}>Include KPI summary</div><div style={{ fontSize: 10, color: '#475569' }}>Cameras, workers, PPE, alerts snapshot</div></div>
+            </label>
+            {handoverEmailSent && (
+              <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 6, padding: '10px 14px', color: '#4ade80', fontSize: 12, marginTop: 8 }}>
+                ✅ Report sent to alphaleodatabricks@gmail.com
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16, paddingTop: 14, borderTop: '1px solid #334155' }}>
+              <button onClick={() => setHandoverEmailOpen(false)} style={{ background: 'transparent', border: '1px solid #334155', color: '#94a3b8', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+              <button onClick={sendHandoverEmail} disabled={handoverEmailSending} style={{ background: '#7c3aed', border: 'none', color: '#fff', padding: '7px 18px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                {handoverEmailSending ? '⏳ Sending...' : '📤 Send Report'}
+              </button>
+            </div>
           </div>
         </div>
       )}

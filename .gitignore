@@ -1,5 +1,10 @@
 node_modules/
-*.mp4
-*.zip
 hls/
 *.env
+collages_output/
+files/
+public/images/
+__pycache__/
+*.mp4
+*.zip
+*.log

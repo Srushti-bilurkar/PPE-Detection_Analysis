@@ -657,6 +657,9 @@ def get_ppe_violations(date: str = None, limit: int = 500):
                 "snap_id":        str(p.get("snap_id", "")),
                 "x1": p.get("x1", 0), "y1": p.get("y1", 0),
                 "x2": p.get("x2", 0), "y2": p.get("y2", 0),
+                # ── Permanent ACK — read from DB so it survives page navigation ──
+                "acknowledged":   doc.get("acknowledged", False),
+                "ack_time":       doc.get("ack_time", ""),
             })
 
     return result
@@ -698,6 +701,51 @@ def get_comments(doc_id: str):
         return doc.get("comments", []) if doc else []
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
+    
+# ═════════════════════════════════════════════════════════════════════════════
+# PPE VIOLATION ACK
+# ═════════════════════════════════════════════════════════════════════════════
+@app.post("/api/ppe-violations/{doc_id}/ack")
+async def ack_ppe_violation(doc_id: str, request: Request):
+    from fastapi import HTTPException
+    try:
+        body    = await request.json()
+        real_id = doc_id.split("_")[0]
+        result  = ppe_results_col.update_one(
+            {"_id": ObjectId(real_id)},
+            {"$set": {
+                "acknowledged": True,
+                "ack_time":     datetime.now().strftime("%Y-%m-%d %H:%M:%S IST"),
+            }}
+        )
+        return {
+            "status":         "acknowledged",
+            "matched":        result.matched_count,
+            "modified":       result.modified_count,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PPE VIOLATION ACK — saves permanently to MongoDB
+# ═════════════════════════════════════════════════════════════════════════════
+@app.post("/api/ppe-violations/{doc_id}/ack")
+async def ack_ppe_violation(doc_id: str, request: Request):
+    from fastapi import HTTPException
+    try:
+        body    = await request.json()
+        real_id = doc_id.split("_")[0]
+        ppe_results_col.update_one(
+            {"_id": ObjectId(real_id)},
+            {"$set": {
+                "acknowledged": True,
+                "ack_time":     datetime.now().strftime("%Y-%m-%d %H:%M:%S IST"),
+            }}
+        )
+        return {"status": "acknowledged"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1182,6 +1230,73 @@ def debug_hour_10(date: str = "2026-04-14"):
         "samples_in_10_hour": hour_10_samples[:30],   # focus on 10:00 hour
         "all_cameras_in_10": list({d["camera"] for d in hour_10_samples})
     }
+# ═════════════════════════════════════════════════════════════════════════════
+# MINUTE TREND
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/minute-trend")
+def get_minute_trend(date: str = None, shift: str = "day"):
+    import re
+    from collections import defaultdict
+
+    query = date_match(date) if date else {}
+    results = list(ppe_results_col.find(query))
+
+    minute_camera = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
+
+    for doc in results:
+        # ── For 2026-04-14 data, camera_ts_ist is empty, use camera_ts ──
+        ts = (doc.get("camera_ts") or
+              doc.get("camera_ts_ist") or
+              doc.get("analyzed_at_ist") or "")
+
+        ts_str = str(ts).replace(" IST", "").strip()
+
+        try:
+            match = re.search(r'(\d{2}):(\d{2})', ts_str)
+            if not match:
+                continue
+            hour   = int(match.group(1))
+            minute = int(match.group(2))
+        except:
+            continue
+
+        if shift == "day"   and not (6 <= hour < 18):  continue
+        if shift == "night" and not (hour < 6 or hour >= 18): continue
+
+        minute_key = f"{hour:02d}:{minute:02d}"
+        camera     = doc.get("camera", "unknown")
+
+        persons = doc.get("persons_count") or 0
+        if persons == 0:
+            persons = (
+                doc.get("total_persons_count") or
+                doc.get("summary", {}).get("total_persons") or
+                len(doc.get("ppe", [])) or 0
+            )
+
+        violations_in_frame = sum(
+            1 for p in doc.get("ppe", [])
+            if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
+        )
+
+        if persons > minute_camera[minute_key][camera]["max_workers"]:
+            minute_camera[minute_key][camera]["max_workers"] = persons
+        if violations_in_frame > minute_camera[minute_key][camera]["max_violations"]:
+            minute_camera[minute_key][camera]["max_violations"] = violations_in_frame
+
+    result = []
+    for minute_key in sorted(minute_camera.keys()):
+        data         = minute_camera[minute_key]
+        peak_workers = sum(c["max_workers"]    for c in data.values())
+        total_viol   = sum(c["max_violations"] for c in data.values())
+        result.append({
+            "minute":         minute_key,
+            "workers_active": peak_workers,
+            "workers_safe":   max(0, peak_workers - total_viol),
+            "violations":     total_viol,
+        })
+
+    return result
 # ═════════════════════════════════════════════════════════════════════════════
 # SNAPSHOTS
 # ═════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,8 @@
+pip install opencv-python numpy
+pip install pymongo
+pip install ultralytics
+pip install openai
+pip install fastapi uvicorn
+pip install python-dotenv
+pip install reportlab
+pip install torch torchvision
