@@ -28,7 +28,11 @@ export const CAMERA_LOCATIONS = [
     id:      'hyderabad',
     label:   'Hyderabad',
     icon:    '🏢',
-    cameras: [{ id: 'CAM-A02', hls_url: '/hls/CAM-A02/stream.m3u8', ready: false }],
+    cameras: Array.from({ length: 20 }, (_, i) => ({
+      id:      `CAM-HYD-${i + 1}`,
+      hls_url: '/hls/CAM-A02/stream.m3u8',
+      ready:   true,
+    })),
   },
   {
     id:    'chennai',
@@ -38,12 +42,20 @@ export const CAMERA_LOCATIONS = [
       {
         id:      'chennai_1',
         label:   'Location 1',
-        cameras: [{ id: 'CAM-A03', hls_url: '/hls/CAM-A03/stream.m3u8', ready: false }],
+        cameras: Array.from({ length: 1 }, (_, i) => ({
+          id:      `CAM-HYD-${i + 1}`,
+          hls_url: '/hls/CAM-A02/stream.m3u8',
+          ready:   true,
+        })),
       },
       {
         id:      'chennai_2',
         label:   'Location 2',
-        cameras: [{ id: 'CAM-A07', hls_url: '/hls/CAM-A07/stream.m3u8', ready: false }],
+        cameras: Array.from({ length: 1 }, (_, i) => ({
+          id:      `CAM-CHN-${i + 1}`,
+          hls_url: '/hls/CAM-A07/stream.m3u8',
+          ready:   false,
+        })),
       },
     ],
   },

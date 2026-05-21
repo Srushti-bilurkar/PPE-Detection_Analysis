@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-
+ 
 // ── Camera ID → Friendly name map ─────────────────────────────────────────────
 const CAMERA_NAME_MAP = {
   'Pier_Cap_Cam_16389': 'Bangalore (CAM-A01)',
@@ -11,12 +11,12 @@ const CAMERA_NAME_MAP = {
   'CAM-A03': 'Chennai Location 1',
   'CAM-A07': 'Chennai Location 2',
 }
-
+ 
 function friendlyCamera(raw) {
   if (!raw) return '—'
   return CAMERA_NAME_MAP[raw] || raw
 }
-
+ 
 function alertTypeLabel(a) {
   const missing    = Array.isArray(a.missing) ? a.missing : (a.missing_ppe || [])
   const helmetMiss = missing.includes('helmet')
@@ -26,21 +26,21 @@ function alertTypeLabel(a) {
   if (vestMiss)               return 'WARNING — vest missing'
   return 'INFO — ppe violation'
 }
-
+ 
 function severityClass(a) {
   const missing = Array.isArray(a.missing) ? a.missing : (a.missing_ppe || [])
   if (missing.includes('helmet') && missing.includes('vest')) return 'critical'
   if (missing.includes('helmet') || missing.includes('vest')) return 'warning'
   return 'info'
 }
-
+ 
 function formatTime(ts) {
   if (!ts) return ''
   if (typeof ts === 'string' && ts.includes('IST')) return ts.split(' ').slice(1, 3).join(' ')
   const d = new Date(ts)
   return isNaN(d) ? ts : d.toLocaleTimeString()
 }
-
+ 
 function timeAgo(ts) {
   if (!ts) return '—'
   const cleaned = typeof ts === 'string' ? ts.replace(' IST', '').trim() : ts
@@ -52,7 +52,40 @@ function timeAgo(ts) {
   if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`
   return `${Math.floor(diff / 86400)}d ago`
 }
-
+ 
+// ── Extract confidence scores (handles both flat and nested ppe[] structure) ──
+function extractConf(obj) {
+  const helmetConf = obj.helmet_conf ?? obj.ppe?.[0]?.helmet_conf ?? null
+  const vestConf   = obj.vest_conf   ?? obj.ppe?.[0]?.vest_conf   ?? null
+  return { helmetConf, vestConf }
+}
+ 
+// ── Confidence pill rendering ──
+function ConfPill({ conf, ok }) {
+  if (conf == null) return null
+  const pct = Math.round(conf * 100)
+  // Color logic: high conf on a violation = bad (red-ish), high conf on pass = good
+  const color = ok
+    ? (pct >= 70 ? '#22c55e' : '#f59e0b')   // pass: green if confident, amber if low
+    : (pct >= 70 ? '#ef4444' : '#f59e0b')   // fail: red if confident, amber if uncertain
+  return (
+    <span style={{
+      marginLeft:      5,
+      fontSize:        10,
+      fontWeight:      700,
+      color,
+      background:      `${color}18`,
+      border:          `1px solid ${color}44`,
+      borderRadius:    3,
+      padding:         '1px 5px',
+      letterSpacing:   '0.02em',
+      verticalAlign:   'middle',
+    }}>
+      {pct}%
+    </span>
+  )
+}
+ 
 /* ============================================================
    ViolationImageModal
    ============================================================ */
@@ -61,7 +94,7 @@ function ViolationImageModal({ worker, onClose }) {
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(false)
   const [feedback, setFeedback] = useState(null)
-
+ 
   useEffect(() => {
     if (!worker) return
     setImgSrc(null); setLoading(true); setError(false); setFeedback(null)
@@ -75,12 +108,13 @@ function ViolationImageModal({ worker, onClose }) {
       .then(blob => { setImgSrc(URL.createObjectURL(blob)); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
   }, [worker])
-
+ 
   if (!worker) return null
-  const missing  = Array.isArray(worker.missing) ? worker.missing : (worker.missing_ppe || [])
-  const helmetOk = !missing.includes('helmet')
-  const vestOk   = !missing.includes('vest')
-
+  const missing    = Array.isArray(worker.missing) ? worker.missing : (worker.missing_ppe || [])
+  const helmetOk   = !missing.includes('helmet')
+  const vestOk     = !missing.includes('vest')
+  const { helmetConf, vestConf } = extractConf(worker)   // ← NEW
+ 
   const sendFeedback = (verdict) => {
     setFeedback(verdict)
     fetch(`/api/violations/${worker._id}/feedback`, {
@@ -88,7 +122,7 @@ function ViolationImageModal({ worker, onClose }) {
       body: JSON.stringify({ verdict, worker_id: worker.worker_id }),
     }).catch(err => console.error('Feedback failed:', err))
   }
-
+ 
   return (
     <div
       style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -119,16 +153,56 @@ function ViolationImageModal({ worker, onClose }) {
             ✕
           </button>
         </div>
-
+ 
+        {/* ── PPE badges WITH confidence scores ── */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-          <span className={`ppe-badge ${helmetOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '4px 14px' }}>
+          <span className={`ppe-badge ${helmetOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '4px 14px', display: 'flex', alignItems: 'center' }}>
             🪖 Helmet: {helmetOk ? '✓ Detected' : '✗ Missing'}
+            <ConfPill conf={helmetConf} ok={helmetOk} />
           </span>
-          <span className={`ppe-badge ${vestOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '4px 14px' }}>
+          <span className={`ppe-badge ${vestOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '4px 14px', display: 'flex', alignItems: 'center' }}>
             🦺 Vest: {vestOk ? '✓ Detected' : '✗ Missing'}
+            <ConfPill conf={vestConf} ok={vestOk} />
           </span>
         </div>
-
+ 
+        {/* ── Confidence detail bar (modal only) ── */}
+        {(helmetConf != null || vestConf != null) && (
+          <div style={{
+            display:      'flex',
+            gap:          12,
+            marginBottom: 14,
+            padding:      '8px 12px',
+            background:   'var(--bg-base)',
+            borderRadius: 6,
+            border:       '1px solid var(--border)',
+            fontSize:     12,
+          }}>
+            <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>🎯 AI Confidence:</span>
+            {helmetConf != null && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Helmet</span>
+                <ConfidenceBar value={helmetConf} ok={helmetOk} />
+                <span style={{ fontWeight: 700, color: helmetOk ? '#22c55e' : '#ef4444' }}>
+                  {Math.round(helmetConf * 100)}%
+                </span>
+              </span>
+            )}
+            {helmetConf != null && vestConf != null && (
+              <span style={{ color: 'var(--border)' }}>|</span>
+            )}
+            {vestConf != null && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'var(--text-muted)' }}>Vest</span>
+                <ConfidenceBar value={vestConf} ok={vestOk} />
+                <span style={{ fontWeight: 700, color: vestOk ? '#22c55e' : '#ef4444' }}>
+                  {Math.round(vestConf * 100)}%
+                </span>
+              </span>
+            )}
+          </div>
+        )}
+ 
         <div style={{ background: '#0a0f1a', borderRadius: 8, width: '100%', minHeight: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', border: '1px solid var(--border)' }}>
           {loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: 'var(--text-muted)', fontSize: 13 }}>
@@ -151,7 +225,7 @@ function ViolationImageModal({ worker, onClose }) {
           )}
         </div>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-
+ 
         <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 'auto' }}>
             {feedback
@@ -179,13 +253,28 @@ function ViolationImageModal({ worker, onClose }) {
     </div>
   )
 }
-
+ 
+/* ============================================================
+   ConfidenceBar — horizontal progress bar used in modal
+   ============================================================ */
+function ConfidenceBar({ value, ok }) {
+  const pct   = Math.round((value ?? 0) * 100)
+  const color = ok
+    ? (pct >= 70 ? '#22c55e' : '#f59e0b')
+    : (pct >= 70 ? '#ef4444' : '#f59e0b')
+  return (
+    <span style={{ display: 'inline-block', width: 60, height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden', verticalAlign: 'middle' }}>
+      <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.4s ease' }} />
+    </span>
+  )
+}
+ 
 /* ============================================================
    AlertComments
    ============================================================ */
 function AlertComments({ docId }) {
   const [comments, setComments] = useState([])
-
+ 
   useEffect(() => {
     if (!docId) return
     fetch(`/api/ppe-violations/${docId}/comments`)
@@ -193,9 +282,9 @@ function AlertComments({ docId }) {
       .then(data => { if (Array.isArray(data)) setComments(data) })
       .catch(() => {})
   }, [docId])
-
+ 
   if (!docId || comments.length === 0) return null
-
+ 
   return (
     <div style={{ marginTop: 6, padding: '8px 10px', background: 'var(--bg-base)', borderRadius: 4, borderLeft: '2px solid var(--blue-vivid)', display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
@@ -213,13 +302,13 @@ function AlertComments({ docId }) {
     </div>
   )
 }
-
+ 
 /* ============================================================
    AlertFeedPage
    ============================================================ */
 export default function AlertFeedPage({ selectedDate, onDateChange }) {
   const today = new Date().toISOString().split('T')[0]
-
+ 
   const [date,          setDate]          = useState(selectedDate || today)
   const [violations,    setViolations]    = useState([])
   const [ackedIds,      setAckedIds]      = useState({})
@@ -228,13 +317,13 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
     catch { return {} }
   })
   const [filter,        setFilter]        = useState('all')
-  const [comments,      setComments]      = useState({})        // text input per alert
-  const [savedComments, setSavedComments] = useState({})        // success flash
-  const [showComment,   setShowComment]   = useState({})        // toggle comment box per alert
+  const [comments,      setComments]      = useState({})
+  const [savedComments, setSavedComments] = useState({})
+  const [showComment,   setShowComment]   = useState({})
   const [loading,       setLoading]       = useState(true)
   const [ackPopup,      setAckPopup]      = useState(null)
   const [previewWorker, setPreviewWorker] = useState(null)
-
+ 
   const updateNotifiedIds = (updater) => {
     setNotifiedIds(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater
@@ -242,11 +331,11 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
       return next
     })
   }
-
+ 
   useEffect(() => {
     if (selectedDate && selectedDate !== date) setDate(selectedDate)
   }, [selectedDate])
-
+ 
   const fetchViolations = useCallback((showSpinner = false) => {
     if (showSpinner) setLoading(true)
     fetch(`/api/ppe-violations?date=${date}&limit=500`)
@@ -254,14 +343,14 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
       .then(data => { if (Array.isArray(data)) setViolations(data); setLoading(false) })
       .catch(() => setLoading(false))
   }, [date])
-
+ 
   useEffect(() => { fetchViolations(true) }, [fetchViolations])
-
+ 
   useEffect(() => {
     const id = setInterval(() => fetchViolations(false), 15_000)
     return () => clearInterval(id)
   }, [fetchViolations])
-
+ 
   const submitComment = async (docId, workerId) => {
     const text = (comments[docId] || '').trim()
     if (!text) return
@@ -279,7 +368,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
       console.error('Comment save failed', e)
     }
   }
-
+ 
   const notify = (violation) => {
     const id = violation._id
     updateNotifiedIds(prev => ({ ...prev, [id]: 'sent' }))
@@ -295,7 +384,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
       }),
     }).catch(() => {})
   }
-
+ 
   const ack = (violation) => {
     const id = violation._id
     setAckedIds(prev => ({ ...prev, [id]: true }))
@@ -310,18 +399,18 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
       setAckPopup(null)
     })
   }
-
+ 
   const alerts = violations.map(v => ({
     ...v,
     severity:     severityClass(v),
     acknowledged: v.acknowledged || ackedIds[v._id] || false,
   }))
-
+ 
   const sortedAlerts = [
     ...alerts.filter(a => !a.acknowledged),
     ...alerts.filter(a =>  a.acknowledged),
   ]
-
+ 
   const unacked       = alerts.filter(a => !a.acknowledged)
   const notifiedCount = unacked.filter(a => notifiedIds[a._id] === 'sent').length
   const counts = {
@@ -332,15 +421,14 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
   const visible = filter === 'all'
     ? sortedAlerts
     : sortedAlerts.filter(a => a.severity === filter)
-
+ 
   return (
     <div className="screen active" id="screen-alerts">
-
-      {/* Image modal */}
+ 
       {previewWorker && (
         <ViolationImageModal worker={previewWorker} onClose={() => setPreviewWorker(null)} />
       )}
-
+ 
       {/* Date bar */}
       <div className="date-bar">
         <span className="date-bar-label">📅 Viewing alerts for:</span>
@@ -360,7 +448,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
           {loading ? '⏳' : '🔄'} Refresh
         </button>
       </div>
-
+ 
       {/* KPI cards */}
       <div className="stat-grid">
         <div className="stat-card red">
@@ -383,7 +471,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
           <div className="stat-value green">{alerts.filter(a => a.acknowledged).length}</div>
         </div>
       </div>
-
+ 
       {/* Feed */}
       <div className="panel">
         <div className="panel-header">
@@ -410,7 +498,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
             </button>
           </div>
         </div>
-
+ 
         <div className="panel-body">
           {loading ? (
             <div className="text-xs text-muted" style={{ padding: '24px 0', textAlign: 'center' }}>
@@ -426,11 +514,12 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                 const missing     = Array.isArray(a.missing) ? a.missing : (a.missing_ppe || [])
                 const helmetOk    = !missing.includes('helmet')
                 const vestOk      = !missing.includes('vest')
+                const { helmetConf, vestConf } = extractConf(a)   // ← NEW
                 const nState      = notifiedIds[a._id]
                 const isAcked     = a.acknowledged
                 const commentOpen = showComment[a._id] || false
                 const charCount   = (comments[a._id] || '').length
-
+ 
                 return (
                   <div
                     key={a._id}
@@ -446,14 +535,14 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                   >
                     <div style={{ display: 'flex', width: '100%', alignItems: 'flex-start', gap: 10 }}>
                       <div className="alert-dot" style={{ marginTop: 4 }} />
-
+ 
                       {/* ── Left: content ── */}
                       <div className="alert-content" style={{ flex: 1, minWidth: 0 }}>
-
+ 
                         <div className="alert-type" style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
                           {alertTypeLabel(a)}
                         </div>
-
+ 
                         <div className="alert-msg" style={{ fontSize: 14, marginBottom: 4 }}>
                           Worker{' '}
                           <strong
@@ -469,28 +558,29 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                             </span>
                           )}
                           {' — '}
-                          <span className={`ppe-badge ${helmetOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '3px 10px' }}>
+                          {/* ── Helmet badge + confidence ── */}
+                          <span className={`ppe-badge ${helmetOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '3px 10px', display: 'inline-flex', alignItems: 'center' }}>
                             🪖 {helmetOk ? '✓ Helmet OK' : '✗ Helmet Missing'}
+                            <ConfPill conf={helmetConf} ok={helmetOk} />
                           </span>
                           {' '}
-                          <span className={`ppe-badge ${vestOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '3px 10px' }}>
+                          {/* ── Vest badge + confidence ── */}
+                          <span className={`ppe-badge ${vestOk ? 'pass' : 'fail'}`} style={{ fontSize: 13, padding: '3px 10px', display: 'inline-flex', alignItems: 'center' }}>
                             🦺 {vestOk ? '✓ Vest OK' : '✗ Vest Missing'}
+                            <ConfPill conf={vestConf} ok={vestOk} />
                           </span>
                         </div>
-
+ 
                         <div className="alert-meta" style={{ fontSize: 13 }}>
                           📹 {friendlyCamera(a.camera || a.zone)}
                           {' · '}{timeAgo(a.timestamp || a.detected_at)}
                           {isAcked && a.ack_time ? ` · ACK at ${formatTime(a.ack_time)}` : ''}
                         </div>
-
+ 
                         <AlertComments docId={a._id} />
-
-                        {/* ── Comment box — only shown when toggled open ── */}
+ 
                         {commentOpen && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
-
-                            {/* Input row */}
                             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                               <input
                                 type="text"
@@ -533,32 +623,23 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                                 ✕
                               </button>
                             </div>
-
-                            {/* Character counter */}
                             <div style={{
                               fontSize:    11,
                               fontFamily:  'monospace',
                               textAlign:   'right',
                               paddingRight: 2,
-                              color: charCount >= 450
-                                ? '#f87171'
-                                : charCount >= 400
-                                ? '#f59e0b'
-                                : '#475569',
+                              color: charCount >= 450 ? '#f87171' : charCount >= 400 ? '#f59e0b' : '#475569',
                             }}>
                               {charCount} / 500
                             </div>
-
                           </div>
                         )}
-                        {/* ── end comment box ── */}
-
+ 
                       </div>
-                      {/* ── end alert-content ── */}
-
+ 
                       {/* ── Right: COMMENT toggle + NOTIFY + ACK ── */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch', flexShrink: 0 }}>
-
+ 
                         <button
                           className="alert-ack"
                           onClick={() => setShowComment(prev => ({ ...prev, [a._id]: !prev[a._id] }))}
@@ -572,7 +653,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                         >
                           💬 Comment
                         </button>
-
+ 
                         {nState === 'sent' ? (
                           <span style={{ fontSize: 13, color: 'var(--blue-vivid)', fontWeight: 600, textAlign: 'center', padding: '6px 8px' }}>
                             🔔 Notified
@@ -590,7 +671,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                             {nState === 'error' ? '✗ Retry' : '🔔 Notify'}
                           </button>
                         )}
-
+ 
                         {!isAcked ? (
                           <button
                             className="alert-ack"
@@ -616,10 +697,9 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
                             ✓ Done
                           </button>
                         )}
-
+ 
                       </div>
-                      {/* ── end NOTIFY/ACK ── */}
-
+ 
                     </div>
                   </div>
                 )
@@ -628,7 +708,7 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
           )}
         </div>
       </div>
-
+ 
       {/* Ack toast */}
       {ackPopup && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: 'var(--green-safe)', color: '#000', padding: '12px 20px', borderRadius: 8, fontWeight: 600, fontSize: 14, zIndex: 9999, boxShadow: '0 4px 20px rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', gap: 10, maxWidth: 400 }}>
@@ -642,7 +722,9 @@ export default function AlertFeedPage({ selectedDate, onDateChange }) {
           </button>
         </div>
       )}
-
+ 
     </div>
   )
 }
+ 
+ 

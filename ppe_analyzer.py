@@ -118,9 +118,21 @@ VEST RULES:
 RULE: Base your answer ONLY on visible color at head and torso.
 Do not overthink — just check: colored head? colored torso?
  
+CONFIDENCE SCORES:
+For each person also provide helmet_conf and vest_conf — your confidence from 0.0 to 1.0.
+IMPORTANT: Always write confidence with exactly 2 decimal places.
+           Write 0.60 not 0.6, write 0.85 not 0.8, write 1.00 not 1.0
+ 
+Use these guidelines for confidence:
+  0.90 - 1.00 → clear front view, good lighting, distinct colors
+  0.70 - 0.89 → partial view, slightly blurry, or ambiguous color
+  0.50 - 0.69 → rear/side view, poor lighting, very small or occluded crop
+  below 0.50  → extremely unclear, barely visible
+ 
 Return ONLY a JSON array:
 [
-  {"label":"Img1-P1","helmet":true,"vest":true},
+  {"label":"Img1-P1","helmet":true,"helmet_conf":0.95,"vest":true,"vest_conf":0.88},
+  {"label":"Img1-P2","helmet":false,"helmet_conf":0.60,"vest":true,"vest_conf":0.75},
   ...
 ]
 Skip blank cells. Include ALL visible persons."""
@@ -149,13 +161,15 @@ def print_collage_summary(persons, safe, violations, prompt_tok, output_tok, tot
     box_line(f"Tokens  : {prompt_tok} prompt + {output_tok} output = {total_tok} total")
     box_mid()
  
-def print_person(label, helmet, vest, status, missing):
-    h = "✓" if helmet else "✗"
-    v = "✓" if vest   else "✗"
+def print_person(label, helmet, vest, status, missing, helmet_conf, vest_conf):
+    h  = "✓" if helmet else "✗"
+    v  = "✓" if vest   else "✗"
+    hc = f"{helmet_conf*100:.0f}%" if helmet_conf is not None else "N/A"
+    vc = f"{vest_conf*100:.0f}%"   if vest_conf   is not None else "N/A"
     if status == "safe":
-        box_line(f"  {label:<18} helmet:{h}  vest:{v}  → SAFE")
+        box_line(f"  {label:<18} helmet:{h}({hc})  vest:{v}({vc})  → SAFE")
     else:
-        box_line(f"  *** {label:<15} helmet:{h}  vest:{v}  → VIOLATION  missing: {', '.join(missing)}")
+        box_line(f"  *** {label:<15} helmet:{h}({hc})  vest:{v}({vc})  → VIOLATION  missing: {', '.join(missing)}")
  
 def print_footer():
     box_bot()
@@ -225,6 +239,27 @@ def find_meta(gpt_label: str, meta_by_label: dict) -> dict:
  
  
 # ══════════════════════════════════════════════════════════════════════════════
+#  SAFE CONF PARSER — always returns float rounded to 2 decimal places
+# ══════════════════════════════════════════════════════════════════════════════
+ 
+def parse_conf(value) -> float:
+    """
+    Safely parse a confidence value from GPT-4o response.
+    Always returns a float rounded to 2 decimal places.
+ 
+    Examples:
+      0.6  → 0.60
+      0.8  → 0.80
+      0.95 → 0.95
+      None → 0.00
+    """
+    try:
+        return round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return 0.00
+ 
+ 
+# ══════════════════════════════════════════════════════════════════════════════
 #  SINGLE GPT-4o CALL
 # ══════════════════════════════════════════════════════════════════════════════
  
@@ -289,20 +324,28 @@ def process_collage(collage, db, client):
     # ── Merge GPT results with persons_meta ───────────────────────────────────
     analyzed = []
     for gpt in gpt_persons:
-        label   = gpt.get("label", "")
-        helmet  = gpt.get("helmet", True)
-        vest    = gpt.get("vest",   True)
-        missing = (["Hat"] if not helmet else []) + (["Vest"] if not vest else [])
-        meta    = find_meta(label, meta_by_label)
+        label       = gpt.get("label", "")
+        helmet      = gpt.get("helmet", True)
+        vest        = gpt.get("vest",   True)
+ 
+        # parse_conf guarantees 2 decimal float e.g. 0.6 → 0.60, None → 0.00
+        helmet_conf = parse_conf(gpt.get("helmet_conf"))
+        vest_conf   = parse_conf(gpt.get("vest_conf"))
+ 
+        missing     = (["Hat"] if not helmet else []) + (["Vest"] if not vest else [])
+        meta        = find_meta(label, meta_by_label)
+ 
         analyzed.append({
-            "label":     label,
-            "helmet":    helmet,
-            "vest":      vest,
-            "missing":   missing,
-            "status":    "violation" if missing else "safe",
-            "camera":    meta.get("camera"),
-            "snap_id":   meta.get("snap_id"),
-            "camera_ts": meta.get("snap_timestamp_ist"),
+            "label":       label,
+            "helmet":      helmet,
+            "helmet_conf": helmet_conf,
+            "vest":        vest,
+            "vest_conf":   vest_conf,
+            "missing":     missing,
+            "status":      "violation" if missing else "safe",
+            "camera":      meta.get("camera"),
+            "snap_id":     meta.get("snap_id"),
+            "camera_ts":   meta.get("snap_timestamp_ist"),
             "bbox": {
                 "x1": meta.get("x1"), "y1": meta.get("y1"),
                 "x2": meta.get("x2"), "y2": meta.get("y2"),
@@ -315,7 +358,10 @@ def process_collage(collage, db, client):
     print_collage_summary(len(analyzed), total_safe, total_violations,
                           prompt_tokens, output_tokens, total_tokens)
     for p in analyzed:
-        print_person(p["label"], p["helmet"], p["vest"], p["status"], p["missing"])
+        print_person(
+            p["label"], p["helmet"], p["vest"], p["status"], p["missing"],
+            p.get("helmet_conf"), p.get("vest_conf")
+        )
     print_footer()
  
     # ── Group by snap_id → one ppe_results doc per snapshot ───────────────────
@@ -338,13 +384,16 @@ def process_collage(collage, db, client):
             bbox = p.get("bbox", {})
             ppe_entries.append({
                 "label":          p["label"],
-                "collage_num":    collage_num,      # ← ADDED: which collage this came from
+                "collage_num":    collage_num,
                 "violation":      p["missing"],
                 "violation_type": (
                     "both_missing" if len(p["missing"]) == 2
-                    else "no_helmet" if "Hat"  in p["missing"]
+                    else "no_helmet" if "Hat" in p["missing"]
                     else "no_vest"
                 ),
+                # 2 decimal float — frontend can display as % e.g. 0.60 → 60%
+                "helmet_conf":    p.get("helmet_conf"),
+                "vest_conf":      p.get("vest_conf"),
                 "x1": bbox.get("x1"), "y1": bbox.get("y1"),
                 "x2": bbox.get("x2"), "y2": bbox.get("y2"),
             })
@@ -356,7 +405,7 @@ def process_collage(collage, db, client):
             "total_persons_count":   len(persons_in_snap),
             "total_violation_count": len(ppe_entries),
             "ppe":                   ppe_entries,
-            "analyzed_at_ist":           now_ist_str(),
+            "analyzed_at_ist":       now_ist_str(),
         }
  
         result = db.ppe_results.insert_one(ppe_result_doc)
@@ -382,11 +431,10 @@ def process_collage(collage, db, client):
     print(f"    prompt={prompt_tokens}  output={output_tokens}  total={total_tokens}", flush=True)
  
     # ── Mark collage analyzed ─────────────────────────────────────────────────
-    # ← REMOVED: violations field from collage update
     db.collages.update_one(
         {"_id": collage_id},
         {"$set": {
-            "analyzed":    True,
+            "analyzed":        True,
             "analyzed_at_ist": now_ist_str(),
         }}
     )

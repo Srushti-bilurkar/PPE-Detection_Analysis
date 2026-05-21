@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const GRID_CSS = `
 .cam-cell {
@@ -133,17 +133,15 @@ function CamVideo({ cam }) {
     }
   }, [cam.hls_url])
 
-  return <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', background: '#000' }}>
-
-  </video>
+  return <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', background: '#000' }} />
 }
 
-// ── Zoom modal (click camera to open) ────────────────────────────────────────
+// ── Zoom modal ────────────────────────────────────────────────────────────────
 function ZoomModal({ cam, onClose }) {
-  const [zoom, setZoom]       = useState(1)
-  const [pan, setPan]         = useState({ x: 0, y: 0 })
-  const isPanning             = useRef(false)
-  const panStart              = useRef({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan]   = useState({ x: 0, y: 0 })
+  const isPanning       = useRef(false)
+  const panStart        = useRef({ x: 0, y: 0 })
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose() }
@@ -171,15 +169,11 @@ function ZoomModal({ cam, onClose }) {
   return (
     <div className="cam-modal-backdrop" onClick={onClose}>
       <div className="cam-modal-inner" onClick={e => e.stopPropagation()}>
-
-        {/* topbar */}
         <div className="cam-modal-topbar">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', fontFamily: 'monospace', letterSpacing: '0.07em' }}>{cam.id}</span>
             <span className={`cam-status-pill ${cam.ready ? 'live' : 'offline'}`}>{cam.ready ? '● LIVE' : '○ WAIT'}</span>
           </div>
-
-          {/* zoom controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {[1, 2, 3, 4].map(level => (
               <button key={level} className="cam-modal-zoom-btn"
@@ -194,8 +188,6 @@ function ZoomModal({ cam, onClose }) {
             <button className="cam-modal-close" onClick={onClose} title="Close (Esc)">✕</button>
           </div>
         </div>
-
-        {/* video with zoom + pan */}
         <div
           style={{ width: '100%', height: '100%', overflow: 'hidden', cursor: zoom > 1 ? 'grab' : 'default' }}
           onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
@@ -209,37 +201,69 @@ function ZoomModal({ cam, onClose }) {
             <CamVideo cam={cam} />
           </div>
         </div>
-
       </div>
     </div>
   )
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-import { useState } from 'react'
-
 export default function CameraGrid({ cameras = [] }) {
   injectCSS()
-  const [zoomedCam, setZoomedCam] = useState(null)
+  const [zoomedCam, setZoomedCam]   = useState(null)
+  const [zoomedIdx, setZoomedIdx]   = useState(null)
+  const containerRef                = useRef(null)
+  const [containerW, setContainerW] = useState(900)
 
-  const slots = cameras.length > 0
-    ? cameras.slice(0, 4)
-    : [
-        { id: 'CAM-A01', hls_url: '/hls/CAM-A01/stream.m3u8', ready: false },
-        { id: 'CAM-A02', hls_url: '/hls/CAM-A02/stream.m3u8', ready: false },
-        { id: 'CAM-A03', hls_url: '/hls/CAM-A03/stream.m3u8', ready: false },
-        { id: 'CAM-A07', hls_url: '/hls/CAM-A07/stream.m3u8', ready: false },
-      ]
+  useEffect(() => {
+    if (!containerRef.current) return
+    const ro = new ResizeObserver(entries => {
+      setContainerW(entries[0].contentRect.width)
+    })
+    ro.observe(containerRef.current)
+    return () => ro.disconnect()
+  }, [])
+
+  const slots = cameras.length > 0 ? cameras : [
+    { id: 'CAM-A01', hls_url: '/hls/CAM-A01/stream.m3u8', ready: false },
+    { id: 'CAM-A02', hls_url: '/hls/CAM-A02/stream.m3u8', ready: false },
+    { id: 'CAM-A03', hls_url: '/hls/CAM-A03/stream.m3u8', ready: false },
+    { id: 'CAM-A07', hls_url: '/hls/CAM-A07/stream.m3u8', ready: false },
+  ]
+
+  function bestGrid(n, W, H) {
+    let bestCols = 1, bestScore = Infinity
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols)
+      const score = Math.abs((W / cols) / (H / rows) - 16 / 9)
+      if (score < bestScore) { bestScore = score; bestCols = cols }
+    }
+    return { cols: bestCols, rows: Math.ceil(n / bestCols) }
+  }
+
+  const BOX_H = 200
+  const { cols, rows } = bestGrid(slots.length, containerW, BOX_H)
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 6, width: '100%', height: 200 }}>
-        {slots.map(cam => (
+      <div
+        ref={containerRef}
+        style={{
+          display: 'grid',
+          width: '100%',
+          height: BOX_H,
+          gridTemplateColumns: `repeat(${cols}, 1fr)`,
+          gridTemplateRows: `repeat(${rows}, 1fr)`,
+          gap: 6,
+          overflow: 'hidden',
+          border: '2px solid #2563eb',
+          borderRadius: 8,
+        }}
+      >
+        {slots.map((cam, i) => (
           <div
-            key={cam.id}
+            key={`${cam.id}-${i}`}
             className="cam-cell"
-            style={{ flex: '1 1 0%' }}
-            onClick={() => setZoomedCam(cam)}
+            onClick={() => { setZoomedCam(cam); setZoomedIdx(i) }}
           >
             <CamVideo cam={cam} />
             <div className="cam-overlay-top">
@@ -252,7 +276,14 @@ export default function CameraGrid({ cameras = [] }) {
         ))}
       </div>
 
-      {zoomedCam && <ZoomModal cam={zoomedCam} onClose={() => setZoomedCam(null)} />}
+      {/* key={zoomedIdx} forces full remount every click — fixes blank video on duplicate streams */}
+      {zoomedCam && (
+        <ZoomModal
+          key={zoomedIdx}
+          cam={zoomedCam}
+          onClose={() => { setZoomedCam(null); setZoomedIdx(null) }}
+        />
+      )}
     </>
   )
 }

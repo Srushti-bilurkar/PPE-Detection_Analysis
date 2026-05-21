@@ -1079,6 +1079,116 @@ def get_daily_peak_compliance(date: str = None):
         "total_persons_count": doc.get("total_persons_count")
     }
 # ═════════════════════════════════════════════════════════════════════════════
+# SAFE WORKERS
+# ═════════════════════════════════════════════════════════════════════════════
+def _calc_max_safe_from_docs(docs: list) -> dict:
+    from collections import defaultdict
+    cam_best = defaultdict(lambda: {"max_safe": 0, "persons": 0, "violations": 0})
+    for doc in docs:
+        cam = doc.get("camera", "unknown")
+        persons = doc.get("persons_count") or 0
+        if persons == 0:
+            persons = (
+                doc.get("total_persons_count") or
+                doc.get("summary", {}).get("total_persons") or
+                len(doc.get("ppe", [])) or 0
+            )
+        viols = sum(
+            1 for p in doc.get("ppe", [])
+            if str(p.get("violation_type") or "").strip()
+            in ("no_helmet", "no_vest", "both_missing")
+        )
+        safe_in_frame = max(0, persons - viols)
+        if safe_in_frame > cam_best[cam]["max_safe"]:
+            cam_best[cam]["max_safe"]   = safe_in_frame
+            cam_best[cam]["persons"]    = persons
+            cam_best[cam]["violations"] = viols
+    return cam_best
+ 
+ 
+@app.get("/api/safe-workers-7day")
+def get_safe_workers_7day(date: str = None):
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    try:
+        end_dt = datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return []
+    result = []
+    for i in range(6, -1, -1):
+        day_dt  = end_dt - timedelta(days=i)
+        day_str = day_dt.strftime("%Y-%m-%d")
+        docs    = list(ppe_results_col.find(date_match(day_str)))
+        cam_best      = _calc_max_safe_from_docs(docs)
+        total_safe    = sum(c["max_safe"]   for c in cam_best.values())
+        total_persons = sum(c["persons"]    for c in cam_best.values())
+        total_viols   = sum(c["violations"] for c in cam_best.values())
+        result.append({
+            "date":       day_str,
+            "safe_count": total_safe,
+            "total":      total_persons,
+            "violations": total_viols,
+        })
+    return result
+ 
+ 
+@app.get("/api/shift-safe-summary")
+def get_shift_safe_summary(date: str = None):
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    import re
+    docs   = list(ppe_results_col.find(date_match(date)))
+    SHIFTS = {
+        "morning":   list(range(6,  14)),
+        "afternoon": list(range(14, 22)),
+        "night":     list(range(22, 24)) + list(range(0, 6)),
+    }
+    shift_docs = {"morning": [], "afternoon": [], "night": []}
+    for doc in docs:
+        ts = (doc.get("camera_ts_ist") or doc.get("camera_ts") or
+              doc.get("analyzed_at_ist") or "")
+        ts_str = str(ts).replace(" IST", "").strip()
+        try:
+            match = re.search(r'(\d{2}):', ts_str)
+            hour  = int(match.group(1)) if match else None
+        except Exception:
+            continue
+        if hour is None:
+            continue
+        for shift, hours in SHIFTS.items():
+            if hour in hours:
+                shift_docs[shift].append(doc)
+                break
+    output = {}
+    for shift, sdocs in shift_docs.items():
+        cam_best      = _calc_max_safe_from_docs(sdocs)
+        output[shift] = sum(c["max_safe"] for c in cam_best.values())
+    return {
+        "morning":   output.get("morning",   0),
+        "afternoon": output.get("afternoon", 0),
+        "night":     output.get("night",     0),
+    }
+ 
+ 
+@app.get("/api/camera-safe-summary")
+def get_camera_safe_summary(date: str = None):
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    docs     = list(ppe_results_col.find(date_match(date)))
+    cam_best = _calc_max_safe_from_docs(docs)
+    result   = []
+    for cam, s in sorted(cam_best.items()):
+        if cam == "unknown" and s["max_safe"] == 0:
+            continue
+        result.append({
+            "camera_id":  cam,
+            "safe_count": s["max_safe"],
+            "total":      s["persons"],
+            "violations": s["violations"],
+        })
+    return result
+ 
+# ═════════════════════════════════════════════════════════════════════════════
 # REPORTS
 # ═════════════════════════════════════════════════════════════════════════════
 @app.get("/api/reports/daily")
@@ -1189,6 +1299,13 @@ def get_hourly_trend(date: str = None, shift: str = "day"):
             "workers_safe": max(0, peak_workers - total_viol),
             "violations": total_viol
         })
+     # ✅ ADD THIS BLOCK — strip future/current hours when querying today
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    use_date  = date if date else today_str
+    if use_date == today_str:
+        now_hour = datetime.now().hour   # e.g. 12 at 12:45
+        # Only return hours that have FULLY completed (bucket_hour < now_hour)
+        result = [r for r in result if int(r["hour"].split(":")[0]) < now_hour]
 
     return result
 
@@ -1297,6 +1414,109 @@ def get_minute_trend(date: str = None, shift: str = "day"):
         })
 
     return result
+# ═════════════════════════════════════════════════════════════════════════════
+# VIOLATIONS TREND — month / year view
+# GET /api/violations-trend?mode=month&shift=day&date=2026-05-11
+# GET /api/violations-trend?mode=year&shift=day&date=2026-05-11
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/violations-trend")
+def get_violations_trend(mode: str = "month", shift: str = "day", date: str = None):
+    import re
+    from collections import defaultdict
+
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    if mode == "month":
+        # Group by DAY for the given month (e.g. 2026-05)
+        year_month = date[:7]  # "2026-05"
+        query = {
+            "$or": [
+                {"camera_ts_ist": {"$regex": f"^{year_month}"}},
+                {"camera_ts":     {"$regex": f"^{year_month}"}},
+            ]
+        }
+    else:
+        # Group by MONTH for the given year (e.g. 2026)
+        year = date[:4]  # "2026"
+        query = {
+            "$or": [
+                {"camera_ts_ist": {"$regex": f"^{year}"}},
+                {"camera_ts":     {"$regex": f"^{year}"}},
+            ]
+        }
+
+    results = list(ppe_results_col.find(query))
+
+    if not results:
+        return {"labels": [], "critical": [], "warning": [], "workers": []}
+
+    # bucket_key: "2026-05-01" for month mode, "2026-05" for year mode
+    bucket_data = defaultdict(lambda: {
+        "max_workers":  0,
+        "critical":     0,
+        "warning":      0,
+    })
+
+    for doc in results:
+        ts = (doc.get("camera_ts_ist") or
+              doc.get("camera_ts") or
+              doc.get("analyzed_at_ist") or "")
+        ts_str = str(ts).replace(" IST", "").strip()
+
+        # Hour filter for shift
+        try:
+            hour_match = re.search(r'(\d{2}):', ts_str)
+            hour = int(hour_match.group(1)) if hour_match else None
+        except:
+            hour = None
+
+        if hour is not None:
+            if shift == "day"   and not (6 <= hour < 18): continue
+            if shift == "night" and not (hour < 6 or hour >= 18): continue
+
+        # Extract bucket key
+        date_part = ts_str[:10]  # "YYYY-MM-DD"
+        if len(date_part) < 10:
+            continue
+
+        if mode == "month":
+            bucket_key = date_part          # "2026-05-11"
+        else:
+            bucket_key = date_part[:7]      # "2026-05"
+
+        # Workers in this frame
+        persons = doc.get("persons_count") or 0
+        if persons == 0:
+            persons = (
+                doc.get("total_persons_count") or
+                doc.get("summary", {}).get("total_persons") or
+                len(doc.get("ppe", [])) or 0
+            )
+
+        # Track max workers per bucket
+        if persons > bucket_data[bucket_key]["max_workers"]:
+            bucket_data[bucket_key]["max_workers"] = persons
+
+        # Count violations
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            if vt == "both_missing":
+                bucket_data[bucket_key]["critical"] += 1
+            elif vt in ("no_helmet", "no_vest"):
+                bucket_data[bucket_key]["warning"] += 1
+
+    if not bucket_data:
+        return {"labels": [], "critical": [], "warning": [], "workers": []}
+
+    sorted_keys = sorted(bucket_data.keys())
+
+    return {
+        "labels":   sorted_keys,
+        "critical": [bucket_data[k]["critical"] for k in sorted_keys],
+        "warning":  [bucket_data[k]["warning"]  for k in sorted_keys],
+        "workers":  [bucket_data[k]["max_workers"] for k in sorted_keys],
+    }
 # ═════════════════════════════════════════════════════════════════════════════
 # SNAPSHOTS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2398,6 +2618,428 @@ def report_weekly_safety(date: str = None):
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=weekly_safety_{start_str}_to_{end_str}.pdf"})
 # ═════════════════════════════════════════════════════════════════════════════
+# MONTHLY SHIFT HANDOVER REPORT
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/reports/monthly-handover")
+def report_monthly_handover(month: str = None):
+    """
+    Generate a Monthly Shift Handover PDF.
+    Pass ?month=YYYY-MM  (e.g. 2026-03).  Defaults to current month.
+
+    Cards shown (matching the dashboard):
+      1. WORKERS SAFE ON-SITE   — sum of daily (max_workers - max_violations)
+      2. MAX VIOLATIONS         — sum of daily max violations
+      3. PPE COMPLIANCE         — overall % across the month
+      4. PPE VIOLATIONS         — sum of daily max violated workers
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib import colors
+    except ImportError:
+        return Response(content="reportlab not installed. Run: pip install reportlab", status_code=500)
+
+    # ── Resolve month ─────────────────────────────────────────────────────
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    try:
+        month_dt = datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        return Response(content="Invalid month format. Use YYYY-MM", status_code=400)
+
+    # First and last day of the month
+    start_dt  = month_dt.replace(day=1)
+    if month_dt.month == 12:
+        end_dt = month_dt.replace(year=month_dt.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        end_dt = month_dt.replace(month=month_dt.month + 1, day=1) - timedelta(days=1)
+
+    start_str = start_dt.strftime("%Y-%m-%d")
+    end_str   = end_dt.strftime("%Y-%m-%d")
+    month_label = month_dt.strftime("%B %Y")   # e.g. "March 2026"
+
+    # ── Fetch all docs in month ───────────────────────────────────────────
+    query = {
+        "$or": [
+            {"camera_ts_ist": {"$gte": start_str, "$lte": end_str + " 99"}},
+            {"camera_ts":     {"$gte": start_str, "$lte": end_str + " 99"}},
+            {"analyzed_at":   {"$gte": start_dt,  "$lt":  end_dt + timedelta(days=1)}},
+        ]
+    }
+    results = list(ppe_results_col.find(query))
+
+    # ── Per-day, per-camera peak → then sum daily peaks ──────────────────
+    from collections import defaultdict
+
+    # Structure: day_str -> camera -> {max_workers, max_violations}
+    day_cam = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
+
+    for doc in results:
+        ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
+        if not ts or ts < start_str or ts > end_str:
+            continue
+        cam = doc.get("camera", "unknown")
+
+        persons = doc.get("persons_count") or 0
+        if persons == 0:
+            persons = (
+                doc.get("total_persons_count") or
+                doc.get("summary", {}).get("total_persons") or
+                len(doc.get("ppe", [])) or 0
+            )
+        viols = sum(
+            1 for p in doc.get("ppe", [])
+            if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
+        )
+        slot = day_cam[ts][cam]
+        if persons > slot["max_workers"]:    slot["max_workers"]    = persons
+        if viols   > slot["max_violations"]: slot["max_violations"] = viols
+
+    # Daily totals = sum of per-camera peaks for that day
+    all_days = []
+    d = start_dt
+    while d <= end_dt:
+        all_days.append(d.strftime("%Y-%m-%d"))
+        d += timedelta(days=1)
+
+    # Only include days that actually have data
+    days_with_data = [day for day in all_days if day in day_cam]
+
+    def day_total_workers(day):
+        return sum(c["max_workers"] for c in day_cam[day].values())
+
+    def day_total_violations(day):
+        return sum(c["max_violations"] for c in day_cam[day].values())
+
+    # Monthly KPIs — sum across days that have data
+    total_workers    = sum(day_total_workers(d)    for d in days_with_data)
+    total_violations = sum(day_total_violations(d) for d in days_with_data)
+    total_safe       = max(0, total_workers - total_violations)
+    compliance_pct   = round((total_safe / total_workers * 100), 1) if total_workers else 100.0
+
+    # ── PDF layout ────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    pw, ph = A4
+
+    # Colours matching the dark dashboard
+    BG_DARK   = (0.07, 0.09, 0.13)
+    BG_CARD   = (0.11, 0.14, 0.20)
+    GREEN     = (0.18, 0.80, 0.44)
+    RED       = (0.90, 0.25, 0.25)
+    YELLOW    = (0.95, 0.75, 0.10)
+    WHITE     = (1.0,  1.0,  1.0)
+    GREY      = (0.55, 0.60, 0.68)
+
+    def set_rgb(rgb):
+        c.setFillColorRGB(*rgb)
+
+    # ── Background ────────────────────────────────────────────────────────
+    set_rgb(BG_DARK)
+    c.rect(0, 0, pw, ph, fill=1, stroke=0)
+
+    # ── Header bar ────────────────────────────────────────────────────────
+    header_h = 75
+    c.setFillColorRGB(0.05, 0.12, 0.25)
+    c.rect(0, ph - header_h, pw, header_h, fill=1, stroke=0)
+
+    # Logo / title text
+    set_rgb(WHITE)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(40, ph - 38, "YOLOINTEL  ·  CONSTRUCTION SITE")
+    c.setFont("Helvetica", 11)
+    set_rgb(GREY)
+    c.drawString(40, ph - 58, f"SHIFT HANDOVER REPORT  ·  {month_label.upper()}")
+
+    # Generated timestamp top-right
+    c.setFont("Helvetica", 8)
+    gen_str = f"Generated: {datetime.now().strftime('%d %b %Y  %I:%M %p')}"
+    c.drawRightString(pw - 40, ph - 38, gen_str)
+
+    y = ph - header_h - 28
+
+    # ── Section label ─────────────────────────────────────────────────────
+    set_rgb(GREY)
+    c.setFont("Helvetica", 9)
+    c.drawString(40, y, f"REPORT COVERS:  {month_label.upper()}   ·   DATA DAYS WITH RECORDS: {len(days_with_data)}")
+    y -= 30
+
+    # ── 4 KPI Cards ───────────────────────────────────────────────────────
+    card_w   = (pw - 80 - 18) / 4   # 4 cards, 6px gap between
+    card_h   = 110
+    gap      = 6
+    card_x   = [40 + i * (card_w + gap) for i in range(4)]
+
+    cards = [
+        {
+            "icon": "✓",
+            "label": "WORKERS SAFE ON-SITE",
+            "value": str(total_safe),
+            "sub":   f"{total_safe} safe  ·  {total_violations} violated",
+            "val_color": GREEN,
+            "border": GREEN,
+        },
+        {
+            "icon": "!",
+            "label": "MAX VIOLATIONS",
+            "value": str(total_violations),
+            "sub":   "Sum of daily peak violations",
+            "val_color": RED,
+            "border": RED,
+        },
+        {
+            "icon": "%",
+            "label": "PPE COMPLIANCE",
+            "value": f"{compliance_pct}%",
+            "sub":   "Monthly avg  ·  All cameras",
+            "val_color": YELLOW,
+            "border": YELLOW,
+        },
+        {
+            "icon": "X",
+            "label": "PPE VIOLATIONS",
+            "value": str(total_violations),
+            "sub":   "Workers without full PPE",
+            "val_color": RED,
+            "border": RED,
+        },
+    ]
+
+    for i, card in enumerate(cards):
+        cx = card_x[i]
+        cy = y - card_h
+
+        # Card background
+        set_rgb(BG_CARD)
+        c.roundRect(cx, cy, card_w, card_h, 6, fill=1, stroke=0)
+
+        # Coloured top border line
+        c.setStrokeColorRGB(*card["border"])
+        c.setLineWidth(2.5)
+        c.line(cx + 6, cy + card_h, cx + card_w - 6, cy + card_h)
+        c.setLineWidth(1)
+
+        # Icon circle
+        set_rgb(card["val_color"])
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(cx + 10, cy + card_h - 22, card["icon"])
+
+        # Label
+        set_rgb(GREY)
+        c.setFont("Helvetica", 7)
+        c.drawString(cx + 10, cy + card_h - 40, card["label"])
+
+        # Big value
+        set_rgb(card["val_color"])
+        c.setFont("Helvetica-Bold", 26)
+        c.drawString(cx + 10, cy + card_h - 72, card["value"])
+
+        # Sub-text
+        set_rgb(GREY)
+        c.setFont("Helvetica", 7)
+        c.drawString(cx + 10, cy + 10, card["sub"])
+
+    y -= card_h + 28
+
+    # ── Day-by-Day breakdown table ────────────────────────────────────────
+    # Section header
+    set_rgb((0.13, 0.16, 0.24))
+    c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
+    set_rgb(WHITE)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(48, y + 2, f"DAY-BY-DAY BREAKDOWN  —  {month_label.upper()}")
+    y -= 26
+
+    # Table column headers
+    col_x = [48, 148, 238, 318, 398, 468]
+    hdrs  = ["Date", "Peak Workers", "Violations", "Safe Workers", "Compliance %", "Days Active"]
+    set_rgb((0.20, 0.24, 0.34))
+    c.rect(40, y - 3, pw - 80, 16, fill=1, stroke=0)
+    set_rgb(GREY)
+    c.setFont("Helvetica-Bold", 8)
+    for cx2, hdr in zip(col_x, hdrs):
+        c.drawString(cx2, y + 1, hdr)
+    y -= 18
+
+    c.setFont("Helvetica", 8)
+    for idx, day in enumerate(days_with_data):
+        w  = day_total_workers(day)
+        v  = day_total_violations(day)
+        s  = max(0, w - v)
+        cp = f"{round(s / w * 100, 1)}%" if w else "N/A"
+
+        # Alternate row bg
+        if idx % 2 == 0:
+            set_rgb((0.11, 0.14, 0.20))
+        else:
+            set_rgb((0.09, 0.11, 0.17))
+        c.rect(40, y - 3, pw - 80, 14, fill=1, stroke=0)
+
+        # Highlight rows with high violations in red tint
+        if v > 0:
+            c.setStrokeColorRGB(*RED)
+        else:
+            c.setStrokeColorRGB(*GREEN)
+        c.setLineWidth(1.5)
+        c.line(40, y - 3, 40, y + 11)
+        c.setLineWidth(1)
+
+        set_rgb(WHITE)
+        row = [day, str(w), str(v), str(s), cp, "✓"]
+        for cx2, val in zip(col_x, row):
+            if val == str(v) and v > 0:
+                set_rgb(RED)
+            elif val == str(s):
+                set_rgb(GREEN)
+            elif val == cp:
+                set_rgb(YELLOW)
+            else:
+                set_rgb(WHITE)
+            c.drawString(cx2, y, val)
+        y -= 15
+
+        if y < 80:
+            c.showPage()
+            set_rgb(BG_DARK)
+            c.rect(0, 0, pw, ph, fill=1, stroke=0)
+            y = ph - 40
+            c.setFont("Helvetica", 8)
+
+    # ── Handover Notes ────────────────────────────────────────────────────
+    if y < 140:
+        c.showPage()
+        set_rgb(BG_DARK)
+        c.rect(0, 0, pw, ph, fill=1, stroke=0)
+        y = ph - 40
+
+    y -= 16
+    set_rgb((0.13, 0.16, 0.24))
+    c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
+    set_rgb(WHITE)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(48, y + 2, "HANDOVER NOTES")
+    y -= 22
+
+    notes = [
+        f"Incoming shift supervisor to review all {total_violations} violation(s) from {month_label} before sign-off.",
+        f"PPE compliance was {compliance_pct}% — monitor zones with recent violations.",
+        f"{total_safe} workers maintained full PPE compliance throughout the period.",
+        f"Total workers recorded: {total_workers}. Verify headcount at all zone entry points.",
+        f"Active data days in period: {len(days_with_data)} of {len(all_days)} calendar days.",
+    ]
+    set_rgb(GREY)
+    c.setFont("Helvetica", 9)
+    for note in notes:
+        c.drawString(52, y, f"•  {note}")
+        y -= 15
+
+    y -= 20
+    # Signature lines
+    set_rgb((0.25, 0.30, 0.42))
+    c.line(48, y, 230, y)
+    c.line(320, y, 510, y)
+    set_rgb(GREY)
+    c.setFont("Helvetica", 8)
+    c.drawString(48, y - 12, "Outgoing Supervisor")
+    c.drawString(320, y - 12, "Incoming Supervisor")
+    c.drawString(200, y - 12, "Time: ___________")
+    c.drawString(460, y - 12, "Time: ___________")
+
+    # ── Footer ────────────────────────────────────────────────────────────
+    set_rgb((0.05, 0.12, 0.25))
+    c.rect(0, 0, pw, 28, fill=1, stroke=0)
+    set_rgb(GREY)
+    c.setFont("Helvetica", 7.5)
+    c.drawString(40, 10, f"YOLOIntel  ·  Construction Site  ·  Auto-generated Shift Handover Report")
+    c.drawRightString(pw - 40, 10, f"Report Period: {month_label}  ·  Generated: {datetime.now().strftime('%d %b %Y %I:%M %p')}")
+
+    c.save()
+    buf.seek(0)
+    fname = f"Handover-Report-{month}.pdf"
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MONTHLY VIOLATIONS WITH ACK + COMMENTS
+# GET /api/alerts-full?date_from=2026-04-01&date_to=2026-04-30
+# GET /api/alerts-full?date=2026-04-07   (single day)
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/alerts-full")
+def get_alerts_full(
+    date_from: str = None,
+    date_to:   str = None,
+    date:      str = None,
+    limit:     int = 9999,
+):
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    if date_from and date_to:
+        query = {
+            "$or": [
+                {"camera_ts_ist": {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
+                {"camera_ts":     {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
+                {"analyzed_at_ist": {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
+            ]
+        }
+    elif date:
+        query = date_match(date)
+    else:
+        query = date_match(today_str)
+
+    results = list(
+        ppe_results_col.find(query)
+        .sort("camera_ts_ist", DESCENDING)
+        .limit(limit)
+    )
+
+    alerts = []
+    for r in results:
+        ts       = get_ts(r)
+        ack      = r.get("acknowledged", False)
+        ack_time = r.get("ack_time", "")
+        comments = r.get("comments", [])
+
+        for idx, p in enumerate(r.get("ppe", [])):
+            vtype = p.get("violation_type", "")
+            if vtype not in ("no_helmet", "no_vest", "both_missing"):
+                continue
+
+            severity = "critical" if vtype == "both_missing" else "warning"
+            label    = p.get("label", "?")
+
+            if vtype == "both_missing":
+                message = f"Worker {label} missing both helmet and vest"
+            elif vtype == "no_helmet":
+                message = f"Worker {label} not wearing helmet"
+            elif vtype == "no_vest":
+                message = f"Worker {label} not wearing vest"
+            else:
+                message = f"Worker {label} PPE violation"
+
+            missing = []
+            if vtype == "no_helmet":      missing = ["helmet"]
+            elif vtype == "no_vest":      missing = ["vest"]
+            elif vtype == "both_missing": missing = ["helmet", "vest"]
+
+            alerts.append({
+                "_id":            f"{str(r['_id'])}_{idx}",
+                "doc_id":         str(r["_id"]),
+                "camera":         r.get("camera", ""),
+                "zone":           r.get("zone", ""),
+                "timestamp":      ts,
+                "worker_id":      label,
+                "type":           "ppe violation",
+                "message":        message,
+                "severity":       severity,
+                "missing_ppe":    missing,
+                "violation_type": vtype,
+                "acknowledged":   ack,
+                "ack_time":       ack_time,
+                "comments":       comments,
+            })
+
+    return alerts
+# ═════════════════════════════════════════════════════════════════════════════
 # SSE LIVE STREAM
 # ═════════════════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
@@ -2453,7 +3095,121 @@ async def stream_updates(request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+# ═════════════════════════════════════════════════════════════════════════════
+# KPI-PERIOD  — per-camera-per-day-max logic, then sum across days
+#
+# Logic:
+#   1. For each day in the range, for each camera,
+#      find the SINGLE FRAME with the most workers (max_workers)
+#      and the SINGLE FRAME with the most violations (max_violations).
+#   2. Sum all camera maxima for that day  → daily_workers, daily_violations
+#   3. Sum all days in the range           → total_workers, total_violations
+#
+# This matches the Safety Dashboard card logic exactly.
+#
+# GET /api/kpi-period?date_from=2026-04-01&date_to=2026-04-30
+# GET /api/kpi-period?date_from=2026-01-01&date_to=2026-12-31
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/kpi-period")
+def get_kpi_period(date_from: str, date_to: str):
+    from collections import defaultdict
 
+    if not date_from or not date_to:
+        return {"error": "date_from and date_to are required"}
+
+    # ── Fetch all docs in range ───────────────────────────────────────────
+    query = {
+        "$or": [
+            {"camera_ts_ist": {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
+            {"camera_ts":     {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
+        ]
+    }
+    results = list(ppe_results_col.find(query))
+
+    if not results:
+        return {
+            "total_workers":    0,
+            "total_safe":       0,
+            "total_violations": 0,
+            "compliance_pct":   100,
+            "critical_alerts":  0,
+            "warning_alerts":   0,
+            "active_cameras":   0,
+            "days_with_data":   0,
+        }
+
+    # ── Per-day, per-camera peak ──────────────────────────────────────────
+    # Structure: { day_str: { camera: { max_workers, max_violations } } }
+    day_cam = defaultdict(lambda: defaultdict(lambda: {
+        "max_workers": 0, "max_violations": 0
+    }))
+
+    for doc in results:
+        ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
+        if not ts or ts < date_from or ts > date_to:
+            continue
+
+        cam = doc.get("camera", "unknown")
+
+        # Workers in this frame
+        persons = doc.get("persons_count") or 0
+        if persons == 0:
+            persons = (
+                doc.get("total_persons_count") or
+                doc.get("summary", {}).get("total_persons") or
+                len(doc.get("ppe", [])) or 0
+            )
+
+        # Violations in this frame
+        viols = sum(
+            1 for p in doc.get("ppe", [])
+            if str(p.get("violation_type") or "").strip()
+            in ("no_helmet", "no_vest", "both_missing")
+        )
+
+        slot = day_cam[ts][cam]
+        if persons > slot["max_workers"]:    slot["max_workers"]    = persons
+        if viols   > slot["max_violations"]: slot["max_violations"] = viols
+
+    # ── Aggregate: sum per-camera maxima across all days ──────────────────
+    total_workers    = 0
+    total_violations = 0
+
+    for day, cameras in day_cam.items():
+        day_workers    = sum(c["max_workers"]    for c in cameras.values())
+        day_violations = sum(c["max_violations"] for c in cameras.values())
+        total_workers    += day_workers
+        total_violations += day_violations
+
+    total_safe     = max(0, total_workers - total_violations)
+    compliance_pct = round((total_safe / total_workers * 100), 1) if total_workers > 0 else 100.0
+
+    # ── Alert severity counts ─────────────────────────────────────────────
+    critical_count = 0
+    warning_count  = 0
+    for doc in results:
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            if vt == "both_missing":                  critical_count += 1
+            elif vt in ("no_helmet", "no_vest"):      warning_count  += 1
+
+    active_cameras = len(set(
+        doc.get("camera", "") for doc in results
+        if doc.get("camera")
+    ))
+
+    return {
+        "total_workers":    total_workers,
+        "total_safe":       total_safe,
+        "total_violations": total_violations,
+        "compliance_pct":   compliance_pct,
+        "critical_alerts":  critical_count,
+        "warning_alerts":   warning_count,
+        "active_cameras":   active_cameras,
+        "days_with_data":   len(day_cam),
+        "date_from":        date_from,
+        "date_to":          date_to,
+    }
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ENTRY POINT

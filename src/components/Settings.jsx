@@ -203,7 +203,7 @@ export default function Settings() {
   const [attachKPI, setAttachKPI] = useState(true)
   const [attachViolations, setAttachViolations] = useState(false)
 
-  const SITE_MANAGER = { name: 'Alphaleo Databricks', email: 'alphaleodatabricks@gmail.com', avatar: 'AL' }
+  const SITE_MANAGER = { name: 'Alphaleo Databricks', email: 'alphaleoyolointel@gmail.com', avatar: 'AL' }
 
 
   async function handleSendEmail() {
@@ -220,7 +220,7 @@ export default function Settings() {
 
         body: JSON.stringify({
 
-          to:      'alphaleodatabricks@gmail.com',
+          to:      'alphaleoyolointel@gmail.com',
 
           subject: emailSubject,
 
@@ -346,7 +346,7 @@ export default function Settings() {
                       <div className="user-avatar" style={{ background: 'rgba(168,85,247,0.25)', color: '#c4b5fd' }}>AL</div>
                       <div>
                         <div className="user-name">Alphaleo Databricks</div>
-                        <div className="user-role">alphaleodatabricks@gmail.com · Receives PDF reports</div>
+                        <div className="user-role">alphaleoyolointel@gmail.com · Receives PDF reports</div>
                       </div>
                       <span className="sm-email-tag">📧 Notify on report</span>
                       <button className="sm-send-btn" onClick={() => { setEmailOpen(true); setEmailSent(false) }}>
@@ -470,7 +470,7 @@ export default function Settings() {
               <div style={{ background: 'rgba(168,85,247,0.2)', width: 36, height: 36, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📧</div>
               <div>
                 <div className="sm-modal-title">Send Report to Site Manager</div>
-                <div className="sm-modal-sub">Alphaleo Databricks · alphaleodatabricks@gmail.com</div>
+                <div className="sm-modal-sub">Alphaleo Databricks · alphaleoyolointel@gmail.com</div>
               </div>
               <button onClick={() => setEmailOpen(false)} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }}>✕</button>
             </div>
@@ -478,7 +478,7 @@ export default function Settings() {
               <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(168,85,247,0.25)', color: '#c4b5fd', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0 }}>AL</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>Alphaleo Databricks</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>alphaleodatabricks@gmail.com</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>alphaleoyolointel@gmail.com</div>
               </div>
               <span style={{ background: 'rgba(168,85,247,0.15)', color: '#c4b5fd', fontSize: 10, padding: '2px 8px', borderRadius: 10, border: '1px solid rgba(168,85,247,0.3)', fontFamily: 'monospace' }}>Site Manager</span>
             </div>
@@ -499,7 +499,7 @@ export default function Settings() {
               <input type="checkbox" checked={attachViolations} onChange={e => setAttachViolations(e.target.checked)} />
               <div><div className="sm-check-label">Include violation log</div><div className="sm-check-sub">Full list of PPE violations</div></div>
             </label>
-            {emailSent && <div className="sm-success">✅ Report sent to alphaleodatabricks@gmail.com</div>}
+            {emailSent && <div className="sm-success">✅ Report sent to alphaleoyolointel@gmail.com</div>}
             <div className="sm-modal-actions">
               <button className="sm-btn-cancel" onClick={() => setEmailOpen(false)}>Cancel</button>
               <button className="sm-btn-send" onClick={handleSendEmail} disabled={emailSending}>
