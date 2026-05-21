@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from torch import _print
 from fastapi.responses import StreamingResponse
-load_dotenv(dotenv_path=r"C:\Users\srustib\Desktop\yolo-frontend\.env")
+load_dotenv(dotenv_path=r"C:\Users\varshas\Desktop\yolo-frontend\.env")
 import time
  
 CACHE = {}
@@ -34,7 +34,7 @@ violations_col  = db["violations"]
 alerts_col      = db["alerts"]
 images_col      = client["yolo_images"]["images"]
 
-COLLAGE_BASE_DIR = Path(r"C:\Users\srustib\Desktop\L-T-project-L-T_Dashboard\collages")
+COLLAGE_BASE_DIR = Path(r"C:\Users\varshas\Desktop\L-T-project-L-T_Dashboard\collages")
 _shutdown_event  = asyncio.Event()
 
 CAMERAS = {
@@ -1221,50 +1221,53 @@ def daily_report(date: str = None):
         "frames_analyzed":          frame_count,
     }
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # HOURLY TREND
+# GET /api/hourly-trend?date=2026-05-21&shift=day
 # ═════════════════════════════════════════════════════════════════════════════
 @app.get("/api/hourly-trend")
-def get_hourly_trend(date: str = None, shift: str = "day"):
-    query = date_match(date) if date else {}
+def get_hourly_trend(date: str = None, shift: str = "both"):
+    import re
+    from collections import defaultdict
+
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    query = date_match(date)
     results = list(ppe_results_col.find(query))
 
-    from collections import defaultdict
-    import re
+    # Shift hour ranges
+    SHIFT_HOURS = {
+        "day":   range(6, 18),
+        "night": list(range(18, 24)) + list(range(0, 6)),
+        "both":  range(0, 24),
+    }
 
-    # Each camera slot tracks:
-    #   max_workers    — highest persons_count in any single frame this hour
-    #   max_violations — highest violation count in any single frame this hour
-    # Final value = SUM of per-camera maxima (same method for both fields)
-    hour_camera = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
+    # Per-hour, per-camera peak
+    hour_cam = defaultdict(lambda: defaultdict(lambda: {
+        "max_workers": 0, "max_violations": 0
+    }))
 
     for doc in results:
-        ts = (doc.get("camera_ts_ist") or
-              doc.get("camera_ts") or
-              doc.get("analyzed_at_ist") or
-              doc.get("created_at_ist") or "")
-
-        ts_str = str(ts).replace(" IST", "").strip()
-
+        ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")
+        ts_clean = ts.replace(" IST", "").strip()
         try:
-            match = re.search(r'(\d{2}):', ts_str)
-            hour = int(match.group(1)) if match else None
-        except:
+            hour_match = re.search(r'(\d{2}):\d{2}', ts_clean)
+            if not hour_match:
+                continue
+            hour = int(hour_match.group(1))
+        except Exception:
             continue
 
-        if hour is None or not (0 <= hour <= 23):
+        # Shift filter
+        if shift == "day" and hour not in SHIFT_HOURS["day"]:
+            continue
+        if shift == "night" and hour not in SHIFT_HOURS["night"]:
             continue
 
-        if shift == "day" and not (6 <= hour < 18):
-            continue
-        if shift == "night" and not (hour < 6 or hour >= 18):
-            continue
+        hour_label = f"{hour:02d}:00"
+        cam = doc.get("camera", "unknown")
 
-        hour_key = f"{hour:02d}:00"
-        camera = doc.get("camera", "unknown")
-
-        # Persons count
         persons = doc.get("persons_count") or 0
         if persons == 0:
             persons = (
@@ -1273,115 +1276,75 @@ def get_hourly_trend(date: str = None, shift: str = "day"):
                 len(doc.get("ppe", [])) or 0
             )
 
-        # Violations in this single frame (excludes null, "", missing)
-        violations_in_frame = sum(
+        viols = sum(
             1 for p in doc.get("ppe", [])
-            if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
+            if str(p.get("violation_type") or "").strip()
+            in ("no_helmet", "no_vest", "both_missing")
         )
 
-        # MAX per camera — same logic for both workers and violations
-        if persons > hour_camera[hour_key][camera]["max_workers"]:
-            hour_camera[hour_key][camera]["max_workers"] = persons
+        slot = hour_cam[hour_label][cam]
+        if persons > slot["max_workers"]:    slot["max_workers"]    = persons
+        if viols   > slot["max_violations"]: slot["max_violations"] = viols
 
-        if violations_in_frame > hour_camera[hour_key][camera]["max_violations"]:
-            hour_camera[hour_key][camera]["max_violations"] = violations_in_frame
+    if not hour_cam:
+        return []
 
-    # Final aggregation: sum the per-camera peak values
     result = []
-    for hour_key in sorted(hour_camera.keys()):
-        data = hour_camera[hour_key]
-        peak_workers = sum(c["max_workers"]    for c in data.values())
-        total_viol   = sum(c["max_violations"] for c in data.values())
-
+    for hour_label in sorted(hour_cam.keys()):
+        cameras = hour_cam[hour_label]
+        total_workers = sum(c["max_workers"]    for c in cameras.values())
+        total_viols   = sum(c["max_violations"] for c in cameras.values())
         result.append({
-            "hour": hour_key,
-            "workers_active": peak_workers,
-            "workers_safe": max(0, peak_workers - total_viol),
-            "violations": total_viol
+            "hour":           hour_label,
+            "workers_active": total_workers,
+            "violations":     total_viols,
         })
-     # ✅ ADD THIS BLOCK — strip future/current hours when querying today
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    use_date  = date if date else today_str
-    if use_date == today_str:
-        now_hour = datetime.now().hour   # e.g. 12 at 12:45
-        # Only return hours that have FULLY completed (bucket_hour < now_hour)
-        result = [r for r in result if int(r["hour"].split(":")[0]) < now_hour]
 
     return result
 
-@app.get("/api/debug/hourly-10")
-def debug_hour_10(date: str = "2026-04-14"):
-    query = date_match(date)
-    docs = list(ppe_results_col.find(query).limit(100))  # increased limit
 
-    data = []
-    for d in docs:
-        ts = str(d.get("camera_ts_ist") or d.get("camera_ts") or d.get("analyzed_at_ist") or "")[:19]
-        persons = (
-            d.get("persons_count") or
-            d.get("total_persons_count") or
-            d.get("summary", {}).get("total_persons") or
-            d.get("total_count") or
-            len(d.get("ppe", [])) or 0
-        )
-        violations = sum(
-            1 for p in d.get("ppe", [])
-            if p.get("violation_type") in ("no_helmet", "no_vest", "both_missing")
-        )
-
-        data.append({
-            "timestamp": ts,
-            "camera": d.get("camera", "unknown"),
-            "persons_count": persons,
-            "violations_in_frame": violations,
-            "collage_num": d.get("collage_num")
-        })
-
-    # Sort and return only 10:xx entries prominently
-    data.sort(key=lambda x: x["timestamp"])
-    hour_10_samples = [d for d in data if "10:" in d.get("timestamp", "")]
-
-    return {
-        "date": date,
-        "total_docs": len(data),
-        "samples_in_10_hour": hour_10_samples[:30],   # focus on 10:00 hour
-        "all_cameras_in_10": list({d["camera"] for d in hour_10_samples})
-    }
 # ═════════════════════════════════════════════════════════════════════════════
 # MINUTE TREND
+# GET /api/minute-trend?date=2026-05-21&shift=day
 # ═════════════════════════════════════════════════════════════════════════════
 @app.get("/api/minute-trend")
-def get_minute_trend(date: str = None, shift: str = "day"):
+def get_minute_trend(date: str = None, shift: str = "both"):
     import re
     from collections import defaultdict
 
-    query = date_match(date) if date else {}
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    query = date_match(date)
     results = list(ppe_results_col.find(query))
 
-    minute_camera = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
+    SHIFT_HOURS = {
+        "day":   range(6, 18),
+        "night": list(range(18, 24)) + list(range(0, 6)),
+    }
+
+    # Per-minute, per-camera peak
+    min_cam = defaultdict(lambda: defaultdict(lambda: {
+        "max_workers": 0, "max_violations": 0
+    }))
 
     for doc in results:
-        # ── For 2026-04-14 data, camera_ts_ist is empty, use camera_ts ──
-        ts = (doc.get("camera_ts") or
-              doc.get("camera_ts_ist") or
-              doc.get("analyzed_at_ist") or "")
-
-        ts_str = str(ts).replace(" IST", "").strip()
-
+        ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")
+        ts_clean = ts.replace(" IST", "").strip()
         try:
-            match = re.search(r'(\d{2}):(\d{2})', ts_str)
-            if not match:
+            m = re.search(r'(\d{2}):(\d{2})', ts_clean)
+            if not m:
                 continue
-            hour   = int(match.group(1))
-            minute = int(match.group(2))
-        except:
+            hour   = int(m.group(1))
+            minute = int(m.group(2))
+        except Exception:
             continue
 
-        if shift == "day"   and not (6 <= hour < 18):  continue
-        if shift == "night" and not (hour < 6 or hour >= 18): continue
+        if shift == "day"   and hour not in SHIFT_HOURS["day"]:   continue
+        if shift == "night" and hour not in SHIFT_HOURS["night"]: continue
 
-        minute_key = f"{hour:02d}:{minute:02d}"
-        camera     = doc.get("camera", "unknown")
+        min_label = f"{hour:02d}:{minute:02d}"
+        cam = doc.get("camera", "unknown")
 
         persons = doc.get("persons_count") or 0
         if persons == 0:
@@ -1391,29 +1354,32 @@ def get_minute_trend(date: str = None, shift: str = "day"):
                 len(doc.get("ppe", [])) or 0
             )
 
-        violations_in_frame = sum(
+        viols = sum(
             1 for p in doc.get("ppe", [])
-            if str(p.get("violation_type") or "").strip() in ("no_helmet", "no_vest", "both_missing")
+            if str(p.get("violation_type") or "").strip()
+            in ("no_helmet", "no_vest", "both_missing")
         )
 
-        if persons > minute_camera[minute_key][camera]["max_workers"]:
-            minute_camera[minute_key][camera]["max_workers"] = persons
-        if violations_in_frame > minute_camera[minute_key][camera]["max_violations"]:
-            minute_camera[minute_key][camera]["max_violations"] = violations_in_frame
+        slot = min_cam[min_label][cam]
+        if persons > slot["max_workers"]:    slot["max_workers"]    = persons
+        if viols   > slot["max_violations"]: slot["max_violations"] = viols
+
+    if not min_cam:
+        return []
 
     result = []
-    for minute_key in sorted(minute_camera.keys()):
-        data         = minute_camera[minute_key]
-        peak_workers = sum(c["max_workers"]    for c in data.values())
-        total_viol   = sum(c["max_violations"] for c in data.values())
+    for min_label in sorted(min_cam.keys()):
+        cameras = min_cam[min_label]
+        total_workers = sum(c["max_workers"]    for c in cameras.values())
+        total_viols   = sum(c["max_violations"] for c in cameras.values())
         result.append({
-            "minute":         minute_key,
-            "workers_active": peak_workers,
-            "workers_safe":   max(0, peak_workers - total_viol),
-            "violations":     total_viol,
+            "minute":         min_label,
+            "workers_active": total_workers,
+            "violations":     total_viols,
         })
 
     return result
+
 # ═════════════════════════════════════════════════════════════════════════════
 # VIOLATIONS TREND — month / year view
 # GET /api/violations-trend?mode=month&shift=day&date=2026-05-11

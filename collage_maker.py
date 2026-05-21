@@ -38,7 +38,7 @@ BADGE_CONF_SCALE  = 0.38     # font scale for confidence % — fixed
 BADGE_THICKNESS   = 1        # font stroke thickness — always 1
 BADGE_CONF_H      = 18       # confidence badge height at top-right — always 18px
  
-COLLAGE_SAVE_DIR = r"C:\Users\srustib\Desktop\yolo-frontend\collages_output"
+COLLAGE_SAVE_DIR = r"C:\Users\varshas\Downloads\yolo-frontend\collages_output"
  
 print("="*65, flush=True)
 print("  Collage Maker — YOLO + MongoDB  [50s timer mode]", flush=True)
@@ -359,7 +359,7 @@ def main():
     print(f"  OK: MongoDB — {DB_NAME}", flush=True)
  
     print("  Loading YOLO model...", flush=True)
-    yolo_model = YOLO(r"C:\Users\srustib\Desktop\yolo-frontend\runs\runs\detect\ppe_model_final\weights\best.pt")
+    yolo_model = YOLO(r"C:\Users\varshas\Desktop\yolo-frontend\runs\runs\detect\ppe_model_final\weights\best.pt")
     print(f"  OK: YOLO ready", flush=True)
  
     result = db.snapshots.update_many(

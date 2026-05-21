@@ -63,7 +63,8 @@
   --bg-base:       #080d18;    /* Page / outermost background         */
   --bg-surface:    #0c1220;    /* Sidebar, topbar, card backgrounds   */
   --bg-elevated:   #101928;    /* Elevated cards, form inputs         */
-  --bg-hover:      #141f30;    /* Hover state on interactive elements */
+  --bg-hover:      #141f30;   /* Hover state on interactive elements */
+  --bg-panel:      #0c1220;   /* Panel backgrounds                   */
 
   /* Borders */
   --border:        rgba(255,255,255,0.07);
@@ -1022,6 +1023,7 @@ body.light-mode {
   --text-primary:  #1a2537;
   --text-secondary:#4a5568;
   --text-muted:    #8896aa;
+  --bg-panel:     #ffffff; 
 }
 body.light-mode .panel,
 body.light-mode .stat-card { box-shadow: 0 1px 4px rgba(0,0,0,0.06); }

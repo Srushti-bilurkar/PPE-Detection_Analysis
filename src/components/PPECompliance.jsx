@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Chart, registerables } from 'chart.js'
- 
+
 Chart.register(...registerables)
- 
+
 function toApiDate(dateStr) {
   if (!dateStr) return new Date().toISOString().split('T')[0]
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr
@@ -12,28 +12,22 @@ function toApiDate(dateStr) {
   }
   return dateStr
 }
- 
-function scoreColor(pct) {
-  if (pct >= 90) return 'var(--green-safe)'
-  if (pct >= 60) return 'var(--amber)'
-  return 'var(--red-alert)'
-}
- 
+
 /* ============================================================
    ZoneComplianceChart — per-camera grouped bar chart
    ============================================================ */
 function ZoneComplianceChart({ zoneData, loading }) {
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
- 
+
   useEffect(() => {
     const ctx = canvasRef.current
     if (!ctx) return
     if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null }
     if (!zoneData || zoneData.length === 0) return
- 
+
     const labels = zoneData.map(z => z.camera || z.zone || z.cam_id || 'Unknown')
- 
+
     chartRef.current = new Chart(ctx, {
       type: 'bar',
       data: {
@@ -96,7 +90,7 @@ function ZoneComplianceChart({ zoneData, loading }) {
     })
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
   }, [zoneData])
- 
+
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
       Loading zone data…
@@ -109,7 +103,7 @@ function ZoneComplianceChart({ zoneData, loading }) {
   )
   return <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
 }
- 
+
 /* ── Zone chart legend ── */
 const ZONE_LEGEND = [
   { label: 'Helmet — Compliance',     color: 'rgba(29,158,117,0.85)'  },
@@ -117,7 +111,7 @@ const ZONE_LEGEND = [
   { label: 'Vest — Compliance',       color: 'rgba(24,95,165,0.85)'   },
   { label: 'Vest — Non-Compliance',   color: 'rgba(186,117,23,0.85)'  },
 ]
- 
+
 function ZoneLegend() {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginBottom: 10 }}>
@@ -130,48 +124,75 @@ function ZoneLegend() {
     </div>
   )
 }
- 
+
 /* ============================================================
-   WorkerViolationTrendChart — date-range / monthly / yearly line chart
+   WorkerViolationTrendChart — date / date-range / monthly / yearly
+   DEFAULT MODE: 'date' (single day hourly breakdown)
    ============================================================ */
 
 const RANGE_MODES = [
+  { key: 'date',    label: 'Date'       },
   { key: 'range',   label: 'Date Range' },
   { key: 'monthly', label: 'Monthly'    },
   { key: 'yearly',  label: 'Yearly'     },
 ]
 
 function WorkerViolationTrendChart() {
-  const today     = new Date().toISOString().split('T')[0]
+  const today        = new Date().toISOString().split('T')[0]
   const firstOfMonth = today.slice(0, 8) + '01'
 
-  const [mode,      setMode]      = useState('range')
-  const [rangeFrom, setRangeFrom] = useState(firstOfMonth)
-  const [rangeTo,   setRangeTo]   = useState(today)
-  const [month,     setMonth]     = useState(today.slice(0, 7))   // YYYY-MM
-  const [year,      setYear]      = useState(today.slice(0, 4))   // YYYY
+  // ── DEFAULT MODE IS 'date' ──
+  const [mode,       setMode]       = useState('date')
+  const [singleDate, setSingleDate] = useState(today)
+  const [rangeFrom,  setRangeFrom]  = useState(firstOfMonth)
+  const [rangeTo,    setRangeTo]    = useState(today)
+  const [month,      setMonth]      = useState(today.slice(0, 7))
+  const [year,       setYear]       = useState(today.slice(0, 4))
 
-  const [trendData, setTrendData] = useState([])
-  const [loading,   setLoading]   = useState(false)
-  const [peakWorkers, setPeakWorkers] = useState(null)
+  const [trendData,      setTrendData]      = useState([])
+  const [loading,        setLoading]        = useState(false)
+  const [peakWorkers,    setPeakWorkers]    = useState(null)
   const [peakViolations, setPeakViolations] = useState(null)
-  const [totals, setTotals] = useState({ workers: 0, violations: 0 })
+  const [totals,         setTotals]         = useState({ workers: 0, violations: 0 })
+  const [showWorkers,    setShowWorkers]    = useState(true)
+  const [showViols,      setShowViols]      = useState(true)
 
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
 
-  /* ── fetch trend data from real /api/kpi-period endpoint ── */
+  /* ── fetch trend data ── */
   const loadTrend = useCallback(async () => {
     setLoading(true)
     try {
+
+      /* ── DATE mode: single day, hourly breakdown ── */
+      if (mode === 'date') {
+        const apiDate = toApiDate(singleDate)
+        try {
+          const r = await fetch(`/api/hourly-trend?date=${apiDate}&shift=both`)
+          if (!r.ok) { setTrendData([]); setLoading(false); return }
+          const raw = await r.json()
+          const points = (Array.isArray(raw) ? raw : []).map(d => ({
+            label:         d.hour,
+            total_workers: d.workers_active || 0,
+            violations:    d.violations     || 0,
+          }))
+          setTrendData(points)
+        } catch {
+          setTrendData([])
+        }
+        setLoading(false)
+        return
+      }
+
+      /* ── RANGE / MONTHLY mode: one point per day ── */
       if (mode === 'range' || mode === 'monthly') {
         const from = mode === 'monthly' ? `${month}-01` : rangeFrom
         const to   = mode === 'monthly'
-          ? new Date(parseInt(month.slice(0,4)), parseInt(month.slice(5,7)), 0)
+          ? new Date(parseInt(month.slice(0, 4)), parseInt(month.slice(5, 7)), 0)
               .toISOString().split('T')[0]
           : rangeTo
 
-        // Build list of days and fetch each in parallel
         const days = []
         const cur  = new Date(from)
         const end  = new Date(to)
@@ -180,8 +201,7 @@ function WorkerViolationTrendChart() {
           cur.setDate(cur.getDate() + 1)
         }
 
-        // Cap end date at today — never fetch future dates
-        const todayStr = new Date().toISOString().split('T')[0]
+        const todayStr   = new Date().toISOString().split('T')[0]
         const cappedDays = days.filter(d => d <= todayStr)
 
         const points = await Promise.all(
@@ -190,32 +210,32 @@ function WorkerViolationTrendChart() {
               const r = await fetch(`/api/kpi-period?date_from=${day}&date_to=${day}`)
               if (!r.ok) return { label: day, total_workers: 0, violations: 0 }
               const d = await r.json()
-              return { label: day, total_workers: d.total_workers ?? 0, violations: d.total_violations ?? 0 }
+              return {
+                label:         day,
+                total_workers: d.total_workers    ?? 0,
+                violations:    d.total_violations ?? 0,
+              }
             } catch {
               return { label: day, total_workers: 0, violations: 0 }
             }
           })
         )
-        // Only drop days with no data at all (keeps 0-violation days but with workers)
         setTrendData(points.filter(p => p.total_workers > 0 || p.violations > 0))
 
+      /* ── YEARLY mode: one point per month ── */
       } else {
-        // Yearly mode — fetch all months up to today (never future months)
         const MONTHS  = ['01','02','03','04','05','06','07','08','09','10','11','12']
         const MLABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-        const todayStr    = new Date().toISOString().split('T')[0]   // "2026-05-20"
-        const currentYear = todayStr.slice(0, 4)                     // "2026"
-        const currentMon  = parseInt(todayStr.slice(5, 7))           // 5  (May)
+        const todayStr    = new Date().toISOString().split('T')[0]
+        const currentYear = todayStr.slice(0, 4)
+        const currentMon  = parseInt(todayStr.slice(5, 7))
 
         const points = await Promise.all(
           MONTHS.map(async (mm, idx) => {
-            const monthNum = idx + 1   // 1-based
-
-            // Skip future months (only when viewing the current year)
+            const monthNum = idx + 1
             if (year === currentYear && monthNum > currentMon) return null
 
-            const from = `${year}-${mm}-01`
-            // Cap end at today for the current month of the current year
+            const from    = `${year}-${mm}-01`
             const lastDay = (year === currentYear && monthNum === currentMon)
               ? todayStr
               : new Date(parseInt(year), monthNum, 0).toISOString().split('T')[0]
@@ -234,26 +254,31 @@ function WorkerViolationTrendChart() {
             }
           })
         )
-        // Keep all non-null points (includes months with 0 — they still show on axis)
-        // but drop months where API returned null (future months)
         setTrendData(points.filter(p => p !== null))
       }
+
     } catch (err) {
       console.error('Trend load error:', err)
       setTrendData([])
     }
     setLoading(false)
-  }, [mode, rangeFrom, rangeTo, month, year])
+  }, [mode, singleDate, rangeFrom, rangeTo, month, year])
 
+  /* ── auto-reload whenever any dependency changes ── */
   useEffect(() => { loadTrend() }, [loadTrend])
 
   /* ── compute peak / totals ── */
   useEffect(() => {
-    if (!trendData.length) { setPeakWorkers(null); setPeakViolations(null); return }
-    const maxW  = trendData.reduce((m, d) => d.total_workers   > (m?.v ?? 0) ? { v: d.total_workers,   l: d.label } : m, null)
-    const maxV  = trendData.reduce((m, d) => d.violations      > (m?.v ?? 0) ? { v: d.violations,      l: d.label } : m, null)
-    const sumW  = trendData.reduce((s, d) => s + (d.total_workers ?? 0), 0)
-    const sumV  = trendData.reduce((s, d) => s + (d.violations   ?? 0), 0)
+    if (!trendData.length) {
+      setPeakWorkers(null)
+      setPeakViolations(null)
+      setTotals({ workers: 0, violations: 0 })
+      return
+    }
+    const maxW = trendData.reduce((m, d) => d.total_workers > (m?.v ?? 0) ? { v: d.total_workers, l: d.label } : m, null)
+    const maxV = trendData.reduce((m, d) => d.violations    > (m?.v ?? 0) ? { v: d.violations,    l: d.label } : m, null)
+    const sumW = trendData.reduce((s, d) => s + (d.total_workers ?? 0), 0)
+    const sumV = trendData.reduce((s, d) => s + (d.violations    ?? 0), 0)
     setPeakWorkers(maxW)
     setPeakViolations(maxV)
     setTotals({ workers: sumW, violations: sumV })
@@ -275,35 +300,35 @@ function WorkerViolationTrendChart() {
       data: {
         labels,
         datasets: [
-          {
-            label:           'Total Workers',
-            data:            workerVals,
-            borderColor:     'rgba(29,200,130,1)',
-            backgroundColor: 'rgba(29,200,130,0.10)',
-            borderWidth:     2.5,
-            pointRadius:     3,
+          showWorkers && {
+            label:            'Total Workers',
+            data:             workerVals,
+            borderColor:      'rgba(29,200,130,1)',
+            backgroundColor:  'rgba(29,200,130,0.10)',
+            borderWidth:      2.5,
+            pointRadius:      mode === 'date' ? 4 : 3,
             pointHoverRadius: 6,
-            tension:         0.4,
-            fill:            true,
+            tension:          0.4,
+            fill:             true,
           },
-          {
-            label:           'Violations',
-            data:            violVals,
-            borderColor:     'rgba(229,62,62,0.9)',
-            backgroundColor: 'rgba(229,62,62,0.07)',
-            borderWidth:     2,
-            borderDash:      [5, 3],
-            pointRadius:     3,
+          showViols && {
+            label:            'Violations',
+            data:             violVals,
+            borderColor:      'rgba(229,62,62,0.9)',
+            backgroundColor:  'rgba(229,62,62,0.07)',
+            borderWidth:      2,
+            borderDash:       [5, 3],
+            pointRadius:      mode === 'date' ? 4 : 3,
             pointHoverRadius: 6,
-            tension:         0.4,
-            fill:            true,
+            tension:          0.4,
+            fill:             true,
           },
-        ],
+        ].filter(Boolean),
       },
       options: {
-        responsive: true,
+        responsive:          true,
         maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
+        interaction:         { mode: 'index', intersect: false },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -314,6 +339,16 @@ function WorkerViolationTrendChart() {
             borderWidth:     1,
             padding:         10,
             callbacks: {
+              title: (items) => {
+                if (!items.length) return ''
+                const lbl = items[0].label
+                if (mode === 'date') {
+                  const hour = parseInt(lbl.split(':')[0])
+                  const next = String(hour + 1).padStart(2, '0')
+                  return `${String(hour).padStart(2, '0')}:00 – ${next}:00`
+                }
+                return lbl
+              },
               label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
             },
           },
@@ -321,37 +356,67 @@ function WorkerViolationTrendChart() {
         scales: {
           x: {
             ticks: {
-              color:    '#666f82',
-              font:     { size: 10 },
-              maxTicksLimit: 12,
-              autoSkip: true,
+              color:         '#666f82',
+              font:          { size: 10 },
+              maxTicksLimit: mode === 'date' ? 24 : 12,
+              autoSkip:      true,
+              callback: function(_, index) {
+                const lbl = labels[index]
+                if (!lbl) return null
+                // For date mode show just the hour number (e.g. "07" → "7")
+                if (mode === 'date') return parseInt(lbl.split(':')[0])
+                return lbl
+              },
             },
-            grid: { color: 'rgba(255,255,255,0.04)' },
+            grid:  { color: 'rgba(255,255,255,0.04)' },
+            title: {
+              display: true,
+              text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
+              color:   '#5a6a82',
+              font:    { size: 10 },
+            },
           },
           y: {
             beginAtZero: true,
-            ticks: { color: '#666f82', font: { size: 10 } },
+            ticks: {
+              color: '#666f82',
+              font:  { size: 10 },
+              callback: (val) => Number.isInteger(val) ? val : null,
+            },
             grid:  { color: 'rgba(255,255,255,0.04)' },
-            title: { display: true, text: 'count', color: '#4a5a72', font: { size: 10 } },
+            title: {
+              display: true,
+              text:    mode === 'date' ? 'count (per hour)' : 'count',
+              color:   '#4a5a72',
+              font:    { size: 10 },
+            },
           },
         },
       },
     })
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
-  }, [trendData])
+  }, [trendData, showWorkers, showViols, mode])
 
   /* ── year options ── */
   const currentYear = parseInt(today.slice(0, 4))
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
 
+  /* ── subtitle text ── */
+  const subtitle = (() => {
+    const pts = trendData.length > 0 ? ` · ${trendData.length} data point${trendData.length > 1 ? 's' : ''}` : ''
+    if (mode === 'date')    return `Hourly · ${singleDate}${pts}`
+    if (mode === 'range')   return `${rangeFrom} → ${rangeTo}${pts}`
+    if (mode === 'monthly') return `Daily · ${month}${pts}`
+    if (mode === 'yearly')  return `Monthly · ${year}${pts}`
+    return ''
+  })()
+
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      {/* header */}
+      {/* ── header ── */}
       <div className="panel-header">
         <div className="panel-title">📈 Total Workers vs Violations — Trend</div>
-        <div className="panel-subtitle">
-          {trendData.length > 0 ? `${trendData.length} data point${trendData.length > 1 ? 's' : ''}` : ''}
-        </div>
+        <div className="panel-subtitle">{subtitle}</div>
       </div>
 
       <div className="panel-body">
@@ -366,15 +431,15 @@ function WorkerViolationTrendChart() {
                 key={m.key}
                 onClick={() => setMode(m.key)}
                 style={{
-                  padding:      '4px 12px',
+                  padding:    '4px 12px',
                   borderRadius: 4,
-                  border:       'none',
-                  cursor:       'pointer',
-                  fontSize:     11,
-                  fontWeight:   mode === m.key ? 600 : 400,
-                  background:   mode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
-                  color:        mode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
-                  transition:   'all 0.15s',
+                  border:     'none',
+                  cursor:     'pointer',
+                  fontSize:   11,
+                  fontWeight: mode === m.key ? 600 : 400,
+                  background: mode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
+                  color:      mode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
+                  transition: 'all 0.15s',
                 }}
               >
                 {m.label}
@@ -382,16 +447,34 @@ function WorkerViolationTrendChart() {
             ))}
           </div>
 
-          {/* date inputs depending on mode */}
+          {/* Date mode: single date picker */}
+          {mode === 'date' && (
+            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
+              📅 Date
+              <input
+                type="date"
+                className="date-picker"
+                value={singleDate}
+                max={today}
+                onChange={e => setSingleDate(e.target.value)}
+                style={{ marginLeft: 4 }}
+              />
+              {singleDate === today && (
+                <span style={{ fontSize: 10, color: 'rgba(29,200,130,1)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
+                  TODAY
+                </span>
+              )}
+            </label>
+          )}
+
+          {/* Date Range mode */}
           {mode === 'range' && (
             <>
               <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                📅 From
+                From
                 <input
-                  type="date"
-                  className="date-picker"
-                  value={rangeFrom}
-                  max={rangeTo}
+                  type="date" className="date-picker"
+                  value={rangeFrom} max={rangeTo}
                   onChange={e => setRangeFrom(e.target.value)}
                   style={{ marginLeft: 4 }}
                 />
@@ -399,11 +482,8 @@ function WorkerViolationTrendChart() {
               <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
                 To
                 <input
-                  type="date"
-                  className="date-picker"
-                  value={rangeTo}
-                  min={rangeFrom}
-                  max={today}
+                  type="date" className="date-picker"
+                  value={rangeTo} min={rangeFrom} max={today}
                   onChange={e => setRangeTo(e.target.value)}
                   style={{ marginLeft: 4 }}
                 />
@@ -411,26 +491,25 @@ function WorkerViolationTrendChart() {
             </>
           )}
 
+          {/* Monthly mode */}
           {mode === 'monthly' && (
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              📅 Month
+              Month
               <input
-                type="month"
-                className="date-picker"
-                value={month}
-                max={today.slice(0, 7)}
+                type="month" className="date-picker"
+                value={month} max={today.slice(0, 7)}
                 onChange={e => setMonth(e.target.value)}
                 style={{ marginLeft: 4 }}
               />
             </label>
           )}
 
+          {/* Yearly mode */}
           {mode === 'yearly' && (
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              📅 Year
+              Year
               <select
-                className="date-picker"
-                value={year}
+                className="date-picker" value={year}
                 onChange={e => setYear(e.target.value)}
                 style={{ marginLeft: 4 }}
               >
@@ -441,18 +520,47 @@ function WorkerViolationTrendChart() {
             </label>
           )}
 
+          {/* Checkboxes */}
+          <div style={{
+            display:    'flex',
+            alignItems: 'center',
+            gap:        10,
+            padding:    '4px 10px',
+            border:     '1px solid var(--border)',
+            borderRadius: 4,
+            background: 'var(--bg-panel)',
+          }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(29,200,130,1)', cursor: 'pointer', userSelect: 'none' }}>
+              <input
+                type="checkbox" checked={showWorkers}
+                onChange={e => setShowWorkers(e.target.checked)}
+                style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }}
+              />
+              Total Workers
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(229,62,62,0.9)', cursor: 'pointer', userSelect: 'none' }}>
+              <input
+                type="checkbox" checked={showViols}
+                onChange={e => setShowViols(e.target.checked)}
+                style={{ accentColor: 'rgba(229,62,62,0.9)', cursor: 'pointer', width: 13, height: 13 }}
+              />
+              Violations
+            </label>
+          </div>
+
+          {/* Refresh button */}
           <button
             onClick={loadTrend}
             disabled={loading}
             style={{
-              marginLeft: 'auto',
-              background: 'var(--bg-base)',
-              border:     '1px solid var(--border)',
+              marginLeft:   'auto',
+              background:   'var(--bg-base)',
+              border:       '1px solid var(--border)',
               borderRadius: 4,
-              color:      'var(--text-muted)',
-              padding:    '3px 10px',
-              fontSize:   11,
-              cursor:     loading ? 'not-allowed' : 'pointer',
+              color:        'var(--text-muted)',
+              padding:      '3px 10px',
+              fontSize:     11,
+              cursor:       loading ? 'not-allowed' : 'pointer',
             }}
           >
             {loading ? '⏳' : '🔄'} Refresh
@@ -466,39 +574,31 @@ function WorkerViolationTrendChart() {
             flexWrap:     'wrap',
             gap:          '6px 20px',
             marginBottom: 10,
+            padding:      '8px 12px',
+            background:   'var(--bg-base)',
+            borderRadius: 6,
             fontSize:     11,
             color:        'var(--text-muted)',
           }}>
             <span>
-              👷 <strong style={{ color: 'rgba(29,200,130,0.95)' }}>Peak Workers: {peakWorkers.v}</strong>
+              👷 <strong style={{ color: 'rgba(29,200,130,0.95)' }}>
+                Peak Workers: {peakWorkers.v}
+              </strong>
               <span style={{ opacity: 0.6 }}> @ {peakWorkers.l}</span>
             </span>
+            <span style={{ opacity: 0.4 }}>|</span>
             <span>
-              🚨 <strong style={{ color: 'rgba(229,62,62,0.9)' }}>Peak Violations: {peakViolations?.v ?? 0}</strong>
+              🚨 <strong style={{ color: 'rgba(229,62,62,0.9)' }}>
+                Peak Violations: {peakViolations?.v ?? 0}
+              </strong>
               <span style={{ opacity: 0.6 }}> @ {peakViolations?.l}</span>
             </span>
-            <span style={{ opacity: 0.6 }}>Total Workers: {totals.workers}</span>
-            <span style={{ opacity: 0.6 }}>Total Violations: {totals.violations}</span>
+            <span style={{ opacity: 0.4 }}>|</span>
+            <span style={{ opacity: 0.6 }}>Total Workers: <strong>{totals.workers}</strong></span>
+            <span style={{ opacity: 0.4 }}>|</span>
+            <span style={{ opacity: 0.6 }}>Total Violations: <strong>{totals.violations}</strong></span>
           </div>
         )}
-
-        {/* ── legend ── */}
-        <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
-          {[
-            { color: 'rgba(29,200,130,1)', label: 'Total Workers', dash: false },
-            { color: 'rgba(229,62,62,0.9)', label: 'Violations',  dash: true  },
-          ].map(({ color, label, dash }) => (
-            <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-              <svg width="24" height="10">
-                {dash
-                  ? <line x1="0" y1="5" x2="24" y2="5" stroke={color} strokeWidth="2" strokeDasharray="5,3" />
-                  : <line x1="0" y1="5" x2="24" y2="5" stroke={color} strokeWidth="2.5" />
-                }
-              </svg>
-              {label}
-            </span>
-          ))}
-        </div>
 
         {/* ── chart canvas ── */}
         <div style={{ height: 220, position: 'relative' }}>
@@ -526,27 +626,25 @@ function WorkerViolationTrendChart() {
    ============================================================ */
 export default function PPECompliance({ selectedDate, onDateChange }) {
   const today = new Date().toISOString().split('T')[0]
- 
+
   const [date,        setDate]        = useState(toApiDate(selectedDate) || today)
   const [loading,     setLoading]     = useState(false)
   const [zoneLoading, setZoneLoading] = useState(false)
   const [error,       setError]       = useState(null)
   const [zoneData,    setZoneData]    = useState([])
- 
-  // violation breakdown counts (for KPI cards)
+
   const [totalViolations, setTotalViolations] = useState(0)
   const [onlyHelmetMiss,  setOnlyHelmetMiss]  = useState(0)
   const [onlyVestMiss,    setOnlyVestMiss]    = useState(0)
   const [bothMiss,        setBothMiss]        = useState(0)
- 
-  // ── Sync date from parent prop ──────────────────────────────
+
   useEffect(() => {
     if (selectedDate) {
       const normalised = toApiDate(selectedDate)
       setDate(prev => prev !== normalised ? normalised : prev)
     }
   }, [selectedDate])
- 
+
   const loadZoneData = useCallback(async (apiDate, violationRows) => {
     setZoneLoading(true)
     try {
@@ -559,14 +657,14 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
           return
         }
       }
-    } catch (_) { /* fall through to local aggregation */ }
- 
+    } catch (_) { /* fall through */ }
+
     if (violationRows && violationRows.length > 0) {
       const map = {}
       violationRows.forEach(r => {
         const cam = r.camera || r.zone || 'Unknown'
         if (!map[cam]) map[cam] = {
-          camera: cam,
+          camera:             cam,
           wearing_helmet:     0,
           not_wearing_helmet: 0,
           wearing_vest:       0,
@@ -582,26 +680,25 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
     }
     setZoneLoading(false)
   }, [])
- 
+
   const loadStats = useCallback(async (d) => {
     const apiDate = toApiDate(d)
     setLoading(true)
     setError(null)
- 
+
     try {
       const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=500`)
       if (!workerRes.ok) throw new Error('Failed to load violations')
       const rawViolations = await workerRes.json()
- 
+
       if (Array.isArray(rawViolations)) {
-        // Deduplicate by worker_id — keep latest
         const map = {}
         rawViolations.forEach(r => {
           const id = r.worker_id || 'Unknown'
           if (!map[id] || (r.timestamp || '') > (map[id].timestamp || '')) map[id] = r
         })
         const workers = Object.values(map)
- 
+
         const total = workers.length
         const hOnly = workers.filter(r => {
           const m = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
@@ -615,66 +712,84 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
           const m = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
           return m.includes('helmet') && m.includes('vest')
         }).length
- 
+
         setTotalViolations(total)
         setOnlyHelmetMiss(hOnly)
         setOnlyVestMiss(vOnly)
         setBothMiss(both)
- 
+
         await loadZoneData(apiDate, rawViolations)
       } else {
-        setTotalViolations(0); setOnlyHelmetMiss(0); setOnlyVestMiss(0); setBothMiss(0)
+        setTotalViolations(0)
+        setOnlyHelmetMiss(0)
+        setOnlyVestMiss(0)
+        setBothMiss(0)
         setZoneData([])
       }
     } catch (err) {
       setError('Failed to load compliance data.')
     }
- 
+
     setLoading(false)
   }, [loadZoneData])
- 
+
   useEffect(() => { loadStats(date) }, [date, loadStats])
- 
-  const handleDateChange = (e) => { const d = e.target.value; setDate(d); onDateChange?.(d) }
- 
+
+  const handleDateChange = (e) => {
+    const d = e.target.value
+    setDate(d)
+    onDateChange?.(d)
+  }
+
   const pct = (n) => totalViolations > 0 ? Math.round((n / totalViolations) * 100) : 0
- 
+
   return (
     <div>
- 
+
       {/* ── Date picker bar ── */}
       <div className="date-bar">
         <span className="date-bar-label">📅 Viewing data for:</span>
-        <input type="date" className="date-picker" value={date} onChange={handleDateChange} max={today} />
+        <input
+          type="date" className="date-picker"
+          value={date} onChange={handleDateChange} max={today}
+        />
         <span className="date-bar-hint">← change date to update compliance data</span>
         <button
           onClick={() => loadStats(date)}
           disabled={loading}
           style={{
-            marginLeft: 8, background: 'var(--bg-base)',
-            border: '1px solid var(--border)', borderRadius: 4,
-            color: 'var(--text-muted)', padding: '3px 10px',
-            fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer',
+            marginLeft:   8,
+            background:   'var(--bg-base)',
+            border:       '1px solid var(--border)',
+            borderRadius: 4,
+            color:        'var(--text-muted)',
+            padding:      '3px 10px',
+            fontSize:     11,
+            cursor:       loading ? 'not-allowed' : 'pointer',
           }}
         >
           {loading ? '⏳' : '🔄'} Refresh
         </button>
       </div>
- 
+
       {/* ── Error banner ── */}
       {error && (
         <div style={{
-          background: 'rgba(229,62,62,0.12)', border: '1px solid rgba(229,62,62,0.3)',
-          borderRadius: 6, padding: '10px 14px', marginBottom: 12,
-          color: 'var(--red-alert)', fontSize: 12,
+          background:   'rgba(229,62,62,0.12)',
+          border:       '1px solid rgba(229,62,62,0.3)',
+          borderRadius: 6,
+          padding:      '10px 14px',
+          marginBottom: 12,
+          color:        'var(--red-alert)',
+          fontSize:     12,
         }}>
           ⚠️ {error}
         </div>
       )}
- 
+
       {/* ── 4 KPI cards ── */}
       <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 16 }}>
- 
+
         <div className="stat-card red">
           <div className="stat-icon">🚨</div>
           <div className="stat-label">TOTAL VIOLATIONS</div>
@@ -683,7 +798,7 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
           </div>
           <div className="stat-delta">workers with any PPE missing</div>
         </div>
- 
+
         <div className="stat-card amber">
           <div className="stat-icon">⛑️</div>
           <div className="stat-label">ONLY HELMET MISSING</div>
@@ -694,7 +809,7 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
             {loading ? '—' : `${pct(onlyHelmetMiss)}% of violations · vest OK`}
           </div>
         </div>
- 
+
         <div className="stat-card amber">
           <div className="stat-icon">🦺</div>
           <div className="stat-label">ONLY VEST MISSING</div>
@@ -705,7 +820,7 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
             {loading ? '—' : `${pct(onlyVestMiss)}% of violations · helmet OK`}
           </div>
         </div>
- 
+
         <div className="stat-card red">
           <div className="stat-icon">❌</div>
           <div className="stat-label">BOTH MISSING</div>
@@ -716,9 +831,9 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
             {loading ? '—' : `${pct(bothMiss)}% high risk ⚠`}
           </div>
         </div>
- 
+
       </div>
- 
+
       {/* ── Zone-wise compliance bar chart ── */}
       <div className="panel">
         <div className="panel-header">
@@ -739,9 +854,7 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
 
       {/* ── Worker vs Violations Trend chart ── */}
       <WorkerViolationTrendChart />
- 
+
     </div>
   )
 }
- 
- 
