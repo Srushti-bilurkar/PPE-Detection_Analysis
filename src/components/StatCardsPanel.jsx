@@ -1,213 +1,304 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { Chart, registerables } from 'chart.js'
+Chart.register(...registerables)
 
-// ─── Mini sparkline SVG ───────────────────────────────────────────────────────
-function Sparkline({ data = [], color = '#22c984', height = 40 }) {
-  if (!data.length) return null
-  const max = Math.max(...data, 1)
-  const w = 200, h = height
-  const pts = data.map((v, i) => {
-    const x = (i / Math.max(data.length - 1, 1)) * w
-    const y = h - (v / max) * (h - 4)
-    return `${x},${y}`
-  }).join(' ')
+// ─── Chart Modal ──────────────────────────────────────────────────────────────
+function CardChartModal({ card, data, onClose }) {
+  const chartRef  = useRef(null)
+  const chartInst = useRef(null)
+
+  const { trendData, displaySafe, displayViolated, displayCompliance, compliance } = data
+
+  useEffect(() => {
+    if (!chartRef.current || !trendData || trendData.length === 0) return
+    if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null }
+
+    const ctx = chartRef.current.getContext('2d')
+    const labels = trendData.map(d => d.hour)
+
+    let datasets = []
+    let yLabel = ''
+
+    if (card.id === 'workers') {
+      yLabel = 'Safe workers'
+      datasets = [{
+        label: 'Safe Workers',
+        data: trendData.map(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0))),
+        borderColor: '#22c984',
+        backgroundColor: 'rgba(34,201,132,0.12)',
+        fill: true, tension: 0.4,
+        pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#22c984',
+        borderWidth: 2.5,
+      }]
+    } else if (card.id === 'violations') {
+      yLabel = 'Violations'
+      datasets = [{
+        label: 'Violations',
+        data: trendData.map(d => d.violations || 0),
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239,68,68,0.10)',
+        fill: true, tension: 0.4,
+        pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#ef4444',
+        borderWidth: 2.5,
+        borderDash: [5, 3],
+      }]
+    } else if (card.id === 'compliance') {
+      yLabel = 'Compliance %'
+      // per-hour compliance
+      datasets = [{
+        label: 'PPE Compliance %',
+        data: trendData.map(d => {
+          const s = Math.max(0, (d.workers_active || 0) - (d.violations || 0))
+          const t = d.workers_active || 0
+          return t > 0 ? Math.round((s / t) * 100) : 0
+        }),
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245,158,11,0.10)',
+        fill: true, tension: 0.4,
+        pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#f59e0b',
+        borderWidth: 2.5,
+      }]
+    } else if (card.id === 'ppe_violations') {
+      yLabel = 'PPE Violation %'
+      datasets = [{
+        label: 'PPE Violations %',
+        data: trendData.map(d => {
+          const s = Math.max(0, (d.workers_active || 0) - (d.violations || 0))
+          const t = d.workers_active || 0
+          return t > 0 ? Math.round(((t - s) / t) * 100) : 0
+        }),
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239,68,68,0.10)',
+        fill: true, tension: 0.4,
+        pointRadius: 4, pointHoverRadius: 6,
+        pointBackgroundColor: '#ef4444',
+        borderWidth: 2.5,
+      }]
+    }
+
+    chartInst.current = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => {
+                if (!items.length) return ''
+                const lbl = items[0].label
+                const hour = parseInt(lbl.split(':')[0])
+                return `${String(hour).padStart(2,'0')}:00 – ${String(hour+1).padStart(2,'00')}:00`
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: '#5a6a82', font: { size: 11 }, callback: (_, i) => parseInt(labels[i]?.split(':')[0]) },
+            grid:  { color: 'rgba(255,255,255,0.04)' },
+            title: { display: true, text: 'Hour', color: '#5a6a82', font: { size: 11 } },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { color: '#a0aec0', font: { size: 11 }, callback: v => Number.isInteger(v) ? v : null },
+            grid:  { color: 'rgba(255,255,255,0.04)' },
+            title: { display: true, text: yLabel, color: '#5a6a82', font: { size: 11 } },
+          },
+        },
+      },
+    })
+
+    return () => { if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null } }
+  }, [card, trendData])
+
+  // peak stats
+  const peakStats = () => {
+    if (!trendData || trendData.length === 0) return null
+    if (card.id === 'workers') {
+      const vals = trendData.map(d => Math.max(0, (d.workers_active||0)-(d.violations||0)))
+      const peak = Math.max(...vals)
+      const peakH = trendData[vals.indexOf(peak)]?.hour || '--'
+      const total = vals.reduce((a,b)=>a+b,0)
+      return [
+        { label: '👷 Peak Safe Workers', val: peak, sub: `@ ${peakH}`, color: '#22c984' },
+        { label: 'Total Safe (day)',      val: total, color: '#22c984' },
+        { label: '✗ Total Violated',      val: displayViolated, color: '#ef4444' },
+      ]
+    }
+    if (card.id === 'violations') {
+      const vals = trendData.map(d => d.violations||0)
+      const peak = Math.max(...vals)
+      const peakH = trendData[vals.indexOf(peak)]?.hour || '--'
+      const total = vals.reduce((a,b)=>a+b,0)
+      return [
+        { label: '🚨 Peak Violations', val: peak, sub: `@ ${peakH}`, color: '#ef4444' },
+        { label: 'Total Violations',   val: total, color: '#ef4444' },
+        { label: '✓ Total Safe',        val: displaySafe, color: '#22c984' },
+      ]
+    }
+    if (card.id === 'compliance') {
+      return [
+        { label: '🦺 Helmet Compliance', val: `${compliance?.helmet ?? 0}%`, color: '#4ade80' },
+        { label: '🦺 Vest Compliance',   val: `${compliance?.vest   ?? 0}%`, color: '#4ade80' },
+        { label: 'Overall Compliance',   val: displayCompliance !== null ? `${displayCompliance}%` : '—', color: '#f59e0b' },
+      ]
+    }
+    if (card.id === 'ppe_violations') {
+      return [
+        { label: '⚠️ No Helmet', val: `${Math.round(100-(compliance?.helmet||0))}%`, color: '#ef4444' },
+        { label: '⚠️ No Vest',   val: `${Math.round(100-(compliance?.vest||0))}%`,   color: '#f59e0b' },
+        { label: 'Overall PPE Violations', val: displayCompliance !== null ? `${100-displayCompliance}%` : '—', color: '#ef4444' },
+      ]
+    }
+    return []
+  }
+
+  const stats = peakStats()
+
   return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
-      {data.map((v, i) => {
-        const x = (i / Math.max(data.length - 1, 1)) * w
-        const y = h - (v / max) * (h - 4)
-        return <circle key={i} cx={x} cy={y} r="3" fill={color} />
-      })}
-    </svg>
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.65)',
+          backdropFilter: 'blur(2px)',
+          zIndex: 900,
+        }}
+      />
+
+      {/* Modal */}
+      <div style={{
+        position: 'fixed',
+        top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: 'min(820px, 92vw)',
+        background: '#0c1220',
+        border: `1px solid ${card.colorKey}44`,
+        borderTop: `3px solid ${card.colorKey}`,
+        borderRadius: 14,
+        zIndex: 950,
+        boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        animation: 'scFadeInUp 0.2s ease',
+        overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 20px',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          background: 'rgba(0,0,0,0.2)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20 }}>{card.icon}</span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>{card.label}</div>
+              <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>Hourly trend · Today</div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 8, color: '#94a3b8', cursor: 'pointer',
+              padding: '4px 12px', fontSize: 18, lineHeight: 1.2,
+            }}
+          >×</button>
+        </div>
+
+        {/* Stats row */}
+        {stats && (
+          <div style={{
+            display: 'flex', gap: 0,
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+          }}>
+            {stats.map((s, i) => (
+              <div key={i} style={{
+                flex: 1, padding: '12px 20px',
+                borderRight: i < stats.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+              }}>
+                <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>{s.label}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{ fontSize: 26, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.val}</span>
+                  {s.sub && <span style={{ fontSize: 11, color: '#64748b' }}>{s.sub}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Chart */}
+        <div style={{ padding: '16px 20px 20px' }}>
+          {trendData && trendData.length > 0 ? (
+            <div style={{ position: 'relative', height: 240 }}>
+              <canvas ref={chartRef} style={{ width: '100%', height: '100%' }} />
+            </div>
+          ) : (
+            <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontSize: 13 }}>
+              No trend data available for this date
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   )
 }
 
-// ─── Bar row ─────────────────────────────────────────────────────────────────
-function BarRow({ label, value, max, color, suffix = '' }) {
-  const pct = Math.round((value / Math.max(max, 1)) * 100)
+// ─── Stat card ────────────────────────────────────────────────────────────────
+function StatCard({ icon, label, value, color, sub, compact = false, onClick }) {
+  const [hover, setHover] = useState(false)
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-        <span style={{ color: '#cbd5e1' }}>{label}</span>
-        <span style={{ color, fontWeight: 700, fontFamily: 'monospace' }}>{value}{suffix}</span>
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        position:     'relative',
+        background:   hover ? '#1e2d45' : '#151f2e',
+        border:       `1px solid ${hover ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)'}`,
+        borderTop:    `3px solid ${color || '#5a6a82'}`,
+        borderRadius: 12,
+        padding:      compact ? '12px 14px' : '16px',
+        cursor:       'pointer',
+        transition:   'background 0.15s, border-color 0.15s, transform 0.12s',
+        transform:    hover ? 'translateY(-2px)' : 'none',
+        minWidth:     0,
+      }}
+    >
+      {/* TAP hint */}
+      <div style={{
+        position: 'absolute', top: 8, right: 10,
+        fontSize: 9, color: hover ? color : '#64748b',
+        fontWeight: 600, letterSpacing: '0.04em',
+        transition: 'color 0.15s',
+      }}>
+        📈 TAP
       </div>
-      <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 3, height: 5 }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.5s ease' }} />
-      </div>
+
+      <div style={{ fontSize: compact ? 18 : 24, marginBottom: compact ? 6 : 12 }}>{icon}</div>
+      <div style={{
+        fontSize: 8, letterSpacing: '0.08em', color: '#cbd5e1',
+        textTransform: 'uppercase', fontWeight: 700,
+        marginBottom: compact ? 4 : 10,
+      }}>{label}</div>
+      <div style={{ fontSize: compact ? 32 : 52, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+      {sub && (
+        <div style={{ marginTop: compact ? 6 : 12, fontSize: compact ? 10 : 13, color: '#94a3b8' }}>{sub}</div>
+      )}
     </div>
   )
 }
 
-// ─── Detail panel content per card ───────────────────────────────────────────
-function DetailContent({ cardId, data }) {
-  const {
-    todaySafe, todayViols, displayViolated, maxViolations, maxVHour, compliance,
-    displaySafe, displayCompliance, safeWorkers7day, shiftSafe, cameraSafe,
-    trendData, visibleAlerts, ackAlert, derivedSafe,
-  } = data
-
-  const workersSafeValue = derivedSafe ?? todaySafe
-
-  if (cardId === 'workers') {
-    return (
-      <div>
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>MAX WORKERS SAFE</div>
-          <div style={{ fontSize: 52, fontWeight: 700, color: '#22c984', lineHeight: 1 }}>{workersSafeValue}</div>
-          <div style={{ fontSize: 12, marginTop: 6 }}>
-            <span style={{ color: '#22c984' }}>{workersSafeValue} safe</span>
-            {' · '}
-            <span style={{ color: '#ef4444' }}>{todayViols} violated</span>
-          </div>
-        </div>
-
-        {/* CHANGED: 7-day trend → hourly trend using trendData */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>HOURLY TREND (TODAY)</div>
-          <Sparkline data={(trendData || []).map(d => d.workers_active)} color="#22c984" height={50} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-            {(trendData || []).map((d, i) => (
-              <div key={i} style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 8, color: '#94a3b8' }}>{d.hour?.slice(0, 5)}</div>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#22c984' }}>{d.workers_active}</div>
-              </div>
-            ))}
-          </div>
-          {(!trendData || trendData.length === 0) && (
-            <div style={{ fontSize: 11, color: '#64748b', textAlign: 'center', marginTop: 8 }}>
-              No hourly data available
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>SHIFT BREAKDOWN</div>
-          {[
-            { label: '🌅 Morning',   val: shiftSafe?.morning   || 0, color: '#f59e0b' },
-            { label: '☀️ Afternoon', val: shiftSafe?.afternoon || 0, color: '#f97316' },
-            { label: '🌙 Night',     val: shiftSafe?.night     || 0, color: '#6366f1' },
-          ].map(s => (
-            <BarRow
-              key={s.label}
-              label={s.label}
-              value={s.val}
-              max={Math.max(shiftSafe?.morning, shiftSafe?.afternoon, shiftSafe?.night, 1)}
-              color={s.color}
-            />
-          ))}
-        </div>
-
-        <div>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>ZONE / CAMERA</div>
-          {(cameraSafe || []).map(c => (
-            <div key={c.camera_id} style={{
-              display: 'flex', justifyContent: 'space-between', fontSize: 11,
-              marginBottom: 6, padding: '5px 8px',
-              background: 'rgba(255,255,255,0.03)', borderRadius: 5,
-            }}>
-              <span style={{ color: '#cbd5e1' }}>📷 {c.camera_id}</span>
-              <span style={{ color: '#22c984', fontWeight: 700 }}>{c.safe_count} safe</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  if (cardId === 'violations') {
-    const vTrend = (trendData || []).map(d => d.violations)
-    return (
-      <div>
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>MAX VIOLATIONS</div>
-          <div style={{ fontSize: 52, fontWeight: 700, color: '#ef4444', lineHeight: 1 }}>{maxViolations}</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>Peak @ {maxVHour}</div>
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>HOURLY VIOLATIONS</div>
-          <Sparkline data={vTrend} color="#ef4444" height={50} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-            {(trendData || []).map((d, i) => (
-              <div key={i} style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 8, color: '#94a3b8' }}>{d.hour?.slice(0, 5)}</div>
-                <div style={{ fontSize: 9, fontWeight: 700, color: '#ef4444' }}>{d.violations}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ padding: '10px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-            <span style={{ color: '#22c984' }}>✓ Safe: <strong>{displaySafe}</strong></span>
-            <span style={{ color: '#ef4444' }}>✗ Violated: <strong>{displayViolated}</strong></span>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (cardId === 'compliance') {
-    return (
-      <div>
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>PPE COMPLIANCE</div>
-          <div style={{ fontSize: 52, fontWeight: 700, color: '#f59e0b', lineHeight: 1 }}>
-            {displayCompliance !== null ? `${displayCompliance}%` : '—'}
-          </div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>Shift avg · All cameras</div>
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>PPE ITEM COMPLIANCE</div>
-          <BarRow label="Helmet" value={compliance?.helmet ?? 0} max={100} color="#4ade80" suffix="%" />
-          <BarRow label="Vest"   value={compliance?.vest   ?? 0} max={100} color="#4ade80" suffix="%" />
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>VIOLATION BREAKDOWN</div>
-          <BarRow label="No Helmet" value={Math.round(100 - (compliance?.helmet || 0))} max={100} color="#ef4444" suffix="%" />
-          <BarRow label="No Vest"   value={Math.round(100 - (compliance?.vest   || 0))} max={100} color="#f59e0b" suffix="%" />
-        </div>
-      </div>
-    )
-  }
-
-  if (cardId === 'ppe_violations') {
-    const noHelmet = Math.round(100 - (compliance?.helmet || 0))
-    const noVest   = Math.round(100 - (compliance?.vest   || 0))
-    return (
-      <div>
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>PPE VIOLATIONS</div>
-          <div style={{ fontSize: 52, fontWeight: 700, color: '#ef4444', lineHeight: 1 }}>
-            {displayCompliance !== null ? `${100 - displayCompliance}%` : '—'}
-          </div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>Workers without full PPE</div>
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>VIOLATION TYPE</div>
-          <BarRow label="No Helmet" value={noHelmet} max={100} color="#ef4444" suffix="%" />
-          <BarRow label="No Vest"   value={noVest}   max={100} color="#f59e0b" suffix="%" />
-        </div>
-
-        <div style={{ padding: '10px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>SEVERITY</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-            <span style={{ color: '#ef4444' }}>Critical: <strong>{noHelmet}%</strong></span>
-            <span style={{ color: '#f59e0b' }}>Warning: <strong>{noVest}%</strong></span>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return null
-}
-
 // ─── Alerts panel ─────────────────────────────────────────────────────────────
-function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, displayCompliance, shiftSafe, compliance, selectedDate, trendData }) {
+function AlertsPanel({ visibleAlerts = [], ackAlert, displayCompliance, selectedDate, trendData }) {
   const hasAlerts = visibleAlerts.length > 0
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
@@ -218,18 +309,15 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
         const h = parseInt(hStr, 10)
         if (isNaN(h)) return raw
         if (h === 0)  return '12a'
-        if (h < 12)  return `${h}a`
+        if (h < 12)   return `${h}a`
         if (h === 12) return '12p'
         return `${h - 12}p`
       })
     : []
 
-  const heatCounts = trendData && trendData.length
-    ? trendData.map(d => d.violations ?? 0)
-    : []
-
-  const maxCount = Math.max(...heatCounts, 1)
-  const peakIdx  = heatCounts.indexOf(Math.max(...heatCounts))
+  const heatCounts = trendData && trendData.length ? trendData.map(d => d.violations ?? 0) : []
+  const maxCount   = Math.max(...heatCounts, 1)
+  const peakIdx    = heatCounts.indexOf(Math.max(...heatCounts))
 
   const getHeatColor = (v) => {
     if (v === 0) return 'rgba(255,255,255,0.04)'
@@ -242,7 +330,6 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-
       <div style={{ flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
@@ -250,7 +337,6 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
           </div>
           <div style={{ fontSize: 9, color: '#94a3b8' }}>Last checked {now}</div>
         </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
           <div style={{ fontSize: 44, fontWeight: 700, color: hasAlerts ? '#ef4444' : '#22c984', lineHeight: 1 }}>
             {visibleAlerts.length}
@@ -261,7 +347,7 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
                 width: 8, height: 8, borderRadius: '50%',
                 background: hasAlerts ? '#ef4444' : '#22c984',
                 display: 'inline-block', marginRight: 8,
-                animation: hasAlerts ? 'pulse 1.4s infinite' : 'none',
+                animation: hasAlerts ? 'scPulse 1.4s infinite' : 'none',
               }} />
               {hasAlerts ? 'unacknowledged' : 'All clear'}
             </div>
@@ -276,16 +362,11 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
         {hasAlerts && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {visibleAlerts.slice(0, 10).map(a => (
-              <div
-                key={a._id}
-                onClick={() => ackAlert(a._id)}
-                style={{
-                  background:   a.severity === 'critical' ? '#2a0f0f' : '#2a1f0a',
-                  borderLeft:   `3px solid ${a.severity === 'critical' ? '#e53e3e' : '#f59e0b'}`,
-                  borderRadius: 5, padding: '7px 10px', cursor: 'pointer',
-                  transition:   'opacity 0.2s',
-                }}
-              >
+              <div key={a._id} onClick={() => ackAlert(a._id)} style={{
+                background:   a.severity === 'critical' ? '#2a0f0f' : '#2a1f0a',
+                borderLeft:   `3px solid ${a.severity === 'critical' ? '#e53e3e' : '#f59e0b'}`,
+                borderRadius: 5, padding: '7px 10px', cursor: 'pointer', transition: 'opacity 0.2s',
+              }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: a.severity === 'critical' ? '#fca5a5' : '#fcd34d', marginBottom: 2 }}>
                   {a.severity?.toUpperCase()} — {a.type?.replace('_', ' ')}
                 </div>
@@ -313,133 +394,49 @@ function AlertsPanel({ visibleAlerts = [], ackAlert, todaySafe, todayViols, disp
               </div>
             </div>
 
-            <div style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              borderRadius: 10,
-              padding: '10px 12px',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
-                  Hourly violation heatmap
-                </div>
-                <div style={{ fontSize: 9, color: '#ef4444' }}>
-                  Peak: {HOURS[peakIdx]} · {heatCounts[peakIdx]} violations
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HOURS.length}, 1fr)`, gap: 3, marginBottom: 4 }}>
-                {HOURS.map(h => (
-                  <div key={h} style={{ fontSize: 8, color: '#94a3b8', textAlign: 'center' }}>{h}</div>
-                ))}
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HOURS.length}, 1fr)`, gap: 3 }}>
-                {heatCounts.map((v, i) => (
-                  <div
-                    key={i}
-                    title={`${HOURS[i]}: ${v} violation${v !== 1 ? 's' : ''}`}
-                    style={{
-                      height: 26, borderRadius: 4,
-                      background: getHeatColor(v),
-                      border: i === peakIdx
-                        ? '1px solid rgba(239,68,68,0.7)'
-                        : '1px solid rgba(255,255,255,0.04)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}
-                  >
-                    {v > 0 && (
-                      <span style={{ fontSize: 8, fontWeight: 700, color: v / maxCount > 0.5 ? '#fff' : '#ef4444' }}>
-                        {v}
-                      </span>
-                    )}
+            {HOURS.length > 0 && (
+              <div style={{
+                background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: 10, padding: '10px 12px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
+                    Hourly violation heatmap
                   </div>
-                ))}
+                  <div style={{ fontSize: 9, color: '#ef4444' }}>
+                    Peak: {HOURS[peakIdx]} · {heatCounts[peakIdx]} violations
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HOURS.length}, 1fr)`, gap: 3, marginBottom: 4 }}>
+                  {HOURS.map(h => (
+                    <div key={h} style={{ fontSize: 8, color: '#94a3b8', textAlign: 'center' }}>{h}</div>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HOURS.length}, 1fr)`, gap: 3 }}>
+                  {heatCounts.map((v, i) => (
+                    <div key={i} title={`${HOURS[i]}: ${v} violation${v !== 1 ? 's' : ''}`} style={{
+                      height: 26, borderRadius: 4, background: getHeatColor(v),
+                      border: i === peakIdx ? '1px solid rgba(239,68,68,0.7)' : '1px solid rgba(255,255,255,0.04)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {v > 0 && (
+                        <span style={{ fontSize: 8, fontWeight: 700, color: v / maxCount > 0.5 ? '#fff' : '#ef4444' }}>{v}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 7 }}>
+                  <span style={{ fontSize: 8, color: '#94a3b8' }}>Low</span>
+                  {['rgba(239,68,68,0.20)', 'rgba(239,68,68,0.42)', 'rgba(239,68,68,0.65)', '#ef4444'].map((c, i) => (
+                    <div key={i} style={{ width: 14, height: 7, borderRadius: 2, background: c }} />
+                  ))}
+                  <span style={{ fontSize: 8, color: '#94a3b8' }}>High</span>
+                </div>
               </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 7 }}>
-                <span style={{ fontSize: 8, color: '#94a3b8' }}>Low</span>
-                {['rgba(239,68,68,0.20)', 'rgba(239,68,68,0.42)', 'rgba(239,68,68,0.65)', '#ef4444'].map((c, i) => (
-                  <div key={i} style={{ width: 14, height: 7, borderRadius: 2, background: c }} />
-                ))}
-                <span style={{ fontSize: 8, color: '#94a3b8' }}>High</span>
-              </div>
-            </div>
+            )}
           </div>
         )}
       </div>
-    </div>
-  )
-}
-
-// ─── Mini (collapsed) card ────────────────────────────────────────────────────
-function MiniCard({ icon, label, value, color, onClick }) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        background:   '#151f2e',
-        border:       '1px solid rgba(255,255,255,0.07)',
-        borderRadius: 10,
-        padding:      '10px 12px',
-        cursor:       'pointer',
-        display:      'flex',
-        alignItems:   'center',
-        gap:          10,
-        transition:   'background 0.15s',
-      }}
-      onMouseEnter={e => e.currentTarget.style.background = '#1e2d45'}
-      onMouseLeave={e => e.currentTarget.style.background = '#151f2e'}
-    >
-      <span style={{ fontSize: 16 }}>{icon}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 8, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase' }}>{label}</div>
-        <div style={{ fontSize: 18, fontWeight: 700, color, lineHeight: 1.1 }}>{value}</div>
-      </div>
-      <span style={{ fontSize: 9, color: '#94a3b8' }}>›</span>
-    </div>
-  )
-}
-
-// ─── Normal stat card ─────────────────────────────────────────────────────────
-function StatCard({ icon, label, value, color, sub, onClick, badge }) {
-  const [hover, setHover] = useState(false)
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        background:   hover && onClick ? '#1e2d45' : '#151f2e',
-        border:       `1px solid ${hover && onClick ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)'}`,
-        /* colored top accent strip per card */
-        borderTop:    `3px solid ${color || '#5a6a82'}`,
-        borderRadius: 12,
-        padding:      '13px 15px',
-        cursor:       onClick ? 'pointer' : 'default',
-        transition:   'background 0.15s, border-color 0.15s, transform 0.12s',
-        transform:    hover && onClick ? 'translateY(-1px)' : 'none',
-        position:     'relative',
-        userSelect:   'none',
-      }}
-    >
-      {onClick && (
-        <div style={{ position: 'absolute', top: 8, right: 10, fontSize: 9, color: '#94a3b8', letterSpacing: '0.06em' }}>TAP ›</div>
-      )}
-      {badge != null && badge > 0 && (
-        <div style={{
-          position: 'absolute', top: -6, right: -6,
-          background: '#e53e3e', color: '#fff', borderRadius: '50%',
-          width: 18, height: 18, fontSize: 10, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>{badge}</div>
-      )}
-      <div style={{ fontSize: 16, marginBottom: 3 }}>{icon}</div>
-      {/* label: was #5a6a82 (grey), now #cbd5e1 (clearly visible light) */}
-      <div style={{ fontSize: 8, letterSpacing: '0.08em', color: '#cbd5e1', marginBottom: 3, textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: color || '#e2e8f0', lineHeight: 1 }}>{value}</div>
-      {/* sub: was #5a6a82, now #94a3b8 */}
-      {sub && <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 3 }}>{sub}</div>}
     </div>
   )
 }
@@ -454,12 +451,38 @@ const CARDS = [
 
 // ─── Main exported component ──────────────────────────────────────────────────
 export default function StatCardsPanel({
-  isLoading, todaySafe, todayViols, displaySafe, displayViolated, displayTotal,
-  displayCompliance, maxViolations, maxVHour, compliance, safeWorkers7day,
-  shiftSafe, cameraSafe, trendData, visibleAlerts, ackAlert, selectedDate,
+  isLoading,
+  onToggleAlerts,
+  todaySafe, todayViols,
+  displaySafe, displayViolated, displayTotal,
+  displayCompliance,
+  maxViolations, maxVHour,
+  compliance,
+  safeWorkers7day,
+  shiftSafe, cameraSafe,
+  trendData,
+  visibleAlerts, ackAlert,
+  selectedDate,
+  showAlertsPanel,
 }) {
-  const [activeCard, setActiveCard] = useState(null)
-  const [derivedSafe, setDerivedSafe] = useState(null)
+  const [panelMounted, setPanelMounted] = useState(false)
+  const [derivedSafe,  setDerivedSafe]  = useState(null)
+  const [activeModal,  setActiveModal]  = useState(null)   // card id or null
+
+  useEffect(() => {
+    if (showAlertsPanel) {
+      requestAnimationFrame(() => setPanelMounted(true))
+    } else {
+      setPanelMounted(false)
+    }
+  }, [showAlertsPanel])
+
+  // close modal on Escape
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') setActiveModal(null) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   useEffect(() => {
     if (!selectedDate) return
@@ -467,9 +490,7 @@ export default function StatCardsPanel({
     fetch(`/api/hourly-trend?date=${selectedDate}&shift=both`)
       .then(r => r.ok ? r.json() : [])
       .then(arr => {
-        const safe = Array.isArray(arr)
-          ? arr.reduce((s, d) => s + (d.workers_active || 0), 0)
-          : 0
+        const safe = Array.isArray(arr) ? arr.reduce((s, d) => s + (d.workers_active || 0), 0) : 0
         setDerivedSafe(safe)
       })
       .catch(() => setDerivedSafe(0))
@@ -484,132 +505,146 @@ export default function StatCardsPanel({
     return '—'
   }
 
-  const detailData = {
-    todaySafe, todayViols, displaySafe, displayViolated, displayTotal, displayCompliance,
-    maxViolations, maxVHour, compliance, safeWorkers7day, shiftSafe, cameraSafe,
-    trendData, visibleAlerts, ackAlert, derivedSafe,
-  }
+  const alertCount   = visibleAlerts?.length ?? 0
+  const activeCardObj = CARDS.find(c => c.id === activeModal)
 
-  const handleCardClick = (id) => setActiveCard(prev => prev === id ? null : id)
+  const modalData = {
+    trendData, displaySafe, displayViolated, displayCompliance, compliance,
+  }
 
   return (
     <>
       <style>{`
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(6px); }
-          to   { opacity: 1; transform: translateY(0); }
+        @keyframes scPulse    { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        @keyframes scFadeInUp { from{opacity:0;transform:translate(-50%,-48%)} to{opacity:1;transform:translate(-50%,-50%)} }
+
+        .sc-alerts-panel {
+          overflow:    hidden;
+          width:       0;
+          max-height:  0;
+          opacity:     0;
+          flex-shrink: 0;
+          transition:  width      0.38s cubic-bezier(0.4,0,0.2,1),
+                       max-height 0.38s ease,
+                       opacity    0.30s ease,
+                       margin-left 0.38s ease;
+          margin-left: 0;
         }
-        .detail-panel-anim { animation: fadeSlideIn 0.22s ease; }
+        .sc-alerts-panel.open {
+          width:       50%;
+          max-height:  800px;
+          opacity:     1;
+          margin-left: 16px;
+        }
       `}</style>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 12, marginBottom: 16, alignItems: 'stretch' }}>
+      {/* ── Chart popup modal ── */}
+      {activeModal && activeCardObj && (
+        <CardChartModal
+          card={activeCardObj}
+          data={modalData}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {/* ── Outer row ── */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16, width: '100%' }}>
 
         {/* LEFT — 4 stat cards */}
-        <div>
-          {activeCard === null ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, height: '100%' }}>
-              {CARDS.map(c => (
-                <StatCard
-                  key={c.id}
-                  icon={c.icon}
-                  label={c.label}
-                  value={getCardValue(c.id)}
-                  color={c.colorKey}
-                  sub={
-                    c.id === 'workers'        ? selectedDate :
-                    c.id === 'violations'     ? `Peak @ ${maxVHour}` :
-                    c.id === 'compliance'     ? 'Shift avg · All cameras' :
-                    'Without full PPE'
-                  }
-                  onClick={() => handleCardClick(c.id)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, height: '100%' }}>
-              {CARDS.filter(c => c.id !== activeCard).map(c => (
-                <MiniCard
-                  key={c.id}
-                  icon={c.icon}
-                  label={c.label}
-                  value={getCardValue(c.id)}
-                  color={c.colorKey}
-                  onClick={() => handleCardClick(c.id)}
-                />
-              ))}
-              <div
-                onClick={() => setActiveCard(null)}
-                style={{
-                  background:   'rgba(255,255,255,0.04)',
-                  border:       `1px solid ${CARDS.find(c => c.id === activeCard)?.colorKey || '#5a6a82'}`,
-                  borderRadius: 10, padding: '10px 12px', cursor: 'pointer',
-                  display:      'flex', alignItems: 'center', gap: 10,
-                }}
-              >
-                <span style={{ fontSize: 16 }}>{CARDS.find(c => c.id === activeCard)?.icon}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 8, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase' }}>
-                    {CARDS.find(c => c.id === activeCard)?.label}
-                  </div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: CARDS.find(c => c.id === activeCard)?.colorKey, lineHeight: 1.1 }}>
-                    {getCardValue(activeCard)}
-                  </div>
-                </div>
-                <span style={{ fontSize: 9, color: '#94a3b8' }}>✕ close</span>
-              </div>
-            </div>
-          )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            display:             'grid',
+            gridTemplateColumns: showAlertsPanel ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+            gap:                 16,
+            transition:          'grid-template-columns 0.35s ease',
+          }}>
+            {CARDS.map(c => (
+              <StatCard
+                key={c.id}
+                icon={c.icon}
+                label={c.label}
+                value={getCardValue(c.id)}
+                color={c.colorKey}
+                compact={showAlertsPanel}
+                sub={
+                  c.id === 'workers'        ? selectedDate :
+                  c.id === 'violations'     ? `Peak @ ${maxVHour}` :
+                  c.id === 'compliance'     ? 'Shift avg · All cameras' :
+                  'Without full PPE'
+                }
+                onClick={() => setActiveModal(c.id)}
+              />
+            ))}
+          </div>
+        </div>
+        {/* Vertical trigger tab */}
+        <div
+          onClick={onToggleAlerts}
+          style={{
+            display:        'flex',
+            flexDirection:  'column',
+            alignItems:     'center',
+            justifyContent: 'center',
+            gap:            6,
+            width:          22,
+            alignSelf:      'stretch',
+            background:     panelMounted
+              ? alertCount > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(34,201,132,0.1)'
+              : 'rgba(255,255,255,0.04)',
+            border:         `1px solid ${panelMounted
+              ? alertCount > 0 ? 'rgba(239,68,68,0.4)' : 'rgba(34,201,132,0.3)'
+              : 'rgba(255,255,255,0.1)'}`,
+            borderRadius:   8,
+            cursor:         'pointer',
+            flexShrink:     0,
+            marginLeft:     8,
+            transition:     'all 0.2s',
+          }}
+        >
+          <span style={{
+            fontSize:      10,
+            fontWeight:    600,
+            color:         panelMounted
+              ? alertCount > 0 ? '#f87171' : '#4ade80'
+              : '#64748b',
+            writingMode:   'vertical-rl',
+            transform:     'rotate(180deg)',
+            letterSpacing: '0.06em',
+            userSelect:    'none',
+          }}>
+            {alertCount > 0 ? `🔔 ${alertCount} alerts` : 'Alerts'}
+          </span>
+          <span style={{
+            fontSize:   14,
+            color:      panelMounted
+              ? alertCount > 0 ? '#f87171' : '#4ade80'
+              : '#64748b',
+            transition: 'transform 0.2s',
+            transform:  panelMounted ? 'rotate(90deg)' : 'rotate(-90deg)',
+          }}>›</span>
         </div>
 
-        {/* RIGHT — alerts / detail panel */}
-        <div
-          style={{
-            background:    activeCard ? '#151f2e' : visibleAlerts.length > 0 ? '#1a0f0f' : '#0f1a14',
-            border:        `1px solid ${activeCard ? 'rgba(255,255,255,0.08)' : visibleAlerts.length > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,
+        {/* RIGHT — alerts panel */}
+        <div className={`sc-alerts-panel ${panelMounted ? 'open' : ''}`}>
+          <div style={{
+            background:    alertCount > 0 ? '#1a0f0f' : '#0f1a14',
+            border:        `1px solid ${alertCount > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,
             borderRadius:  14,
             padding:       18,
-            height:        320,
             boxSizing:     'border-box',
             display:       'flex',
             flexDirection: 'column',
             overflow:      'hidden',
-            position:      'relative',
-          }}
-        >
-          {activeCard ? (
-            <div key={activeCard} className="detail-panel-anim" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexShrink: 0 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0', letterSpacing: '0.04em' }}>
-                  {CARDS.find(c => c.id === activeCard)?.icon}{' '}
-                  {CARDS.find(c => c.id === activeCard)?.label} — Details
-                </div>
-                <button
-                  onClick={() => setActiveCard(null)}
-                  style={{
-                    background: 'none', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 6, color: '#94a3b8', cursor: 'pointer',
-                    padding: '2px 10px', fontSize: 14, lineHeight: 1.4,
-                  }}
-                >×</button>
-              </div>
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                <DetailContent cardId={activeCard} data={detailData} />
-              </div>
-            </div>
-          ) : (
+            height:        '100%',
+          }}>
             <AlertsPanel
               visibleAlerts={visibleAlerts}
               ackAlert={ackAlert}
-              todaySafe={todaySafe}
-              todayViols={todayViols}
               displayCompliance={displayCompliance}
-              shiftSafe={shiftSafe}
-              compliance={compliance}
               selectedDate={selectedDate}
               trendData={trendData}
             />
-          )}
+          </div>
         </div>
 
       </div>
