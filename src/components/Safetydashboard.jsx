@@ -3,7 +3,7 @@ import { Chart, registerables } from 'chart.js'
 import { getCameras } from '../api'
 import LocationCameraPanel from './LocationCameraPanel'
 import StatCardsPanel from './StatCardsPanel'
-
+import { CAMERA_LOCATIONS } from './UserContext'
 Chart.register(...registerables)
 
 // ── Mini Calendar ─────────────────────────────────────────────────────────
@@ -86,32 +86,31 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
   const chartRef  = useRef(null)
   const chartInst = useRef(null)
 
-  const [cameras,          setCameras]          = useState([])
-  const [compliance,       setCompliance]       = useState({ helmet: 0, vest: 0 })
-  const [showTotal, setShowTotal] = useState(true)
-  const [trendData,        setTrendData]        = useState(null)
-  const [minuteData,       setMinuteData]       = useState([])
-  const [ackedIds,         setAckedIds]         = useState(new Set())
-  const [selectedShift,    setSelectedShift]    = useState('day')
-  const [daySafe,          setDaySafe]          = useState(0)
-  const [dayViolated,      setDayViolated]      = useState(0)
-  const [isLoading,        setIsLoading]        = useState(false)
-  const [viewMode,         setViewMode]         = useState('hourly')
-  const [calOpen,          setCalOpen]          = useState(false)
-  const [showAlertsPanel,  setShowAlertsPanel]  = useState(false)   
+  const [cameras,        setCameras]        = useState([])
+  const [compliance,     setCompliance]     = useState({ helmet: 0, vest: 0 })
+  const [trendData,      setTrendData]      = useState(null)
+  const [minuteData,     setMinuteData]     = useState([])
+  const [ackedIds,       setAckedIds]       = useState(new Set())
+  const [selectedShift,  setSelectedShift]  = useState('day')
+  const [daySafe,        setDaySafe]        = useState(0)
+  const [dayViolated,    setDayViolated]    = useState(0)
+  const [isLoading,      setIsLoading]      = useState(false)
+  const [viewMode,       setViewMode]       = useState('hourly')
+  const [calOpen,        setCalOpen]        = useState(false)
+  const [chartCalOpen,   setChartCalOpen]   = useState(false)
+  const [showSafe,       setShowSafe]       = useState(true)
+  const [showViols,      setShowViols]      = useState(true)
+  const [safeWorkers7day,setSafeWorkers7day]= useState([])
+  const [shiftSafe,      setShiftSafe]      = useState({ morning: 0, afternoon: 0, night: 0 })
+  const [cameraSafe,     setCameraSafe]     = useState([])
+
+  // ── Camera filter state (lifted from LocationCameraPanel) ─────────────
+  const [selectedCamera, setSelectedCamera] = useState(null) // cam object or null
+
   const calRef      = useRef(null)
   const chartCalRef = useRef(null)
 
-  const [chartCalOpen, setChartCalOpen] = useState(false)
-
-  const [showSafe,  setShowSafe]  = useState(true)
-  const [showViols, setShowViols] = useState(true)
-
-  const [safeWorkers7day, setSafeWorkers7day] = useState([])
-  const [shiftSafe,       setShiftSafe]       = useState({ morning: 0, afternoon: 0, night: 0 })
-  const [cameraSafe,      setCameraSafe]      = useState([])
-
-  // ── Close calendar on outside click ──────────────────────────────────
+  // ── Close calendars on outside click ──────────────────────────────────
   useEffect(() => {
     const handler = e => {
       if (calRef.current && !calRef.current.contains(e.target)) setCalOpen(false)
@@ -121,21 +120,23 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // ── fetch trend data ───────────────────────────────────────────────────────
+  // ── fetch trend data (re-runs when camera filter changes) ──────────────
   useEffect(() => {
     setTrendData(null)
     setMinuteData([])
     setIsLoading(true)
 
-    const params = new URLSearchParams({ date: selectedDate, shift: selectedShift })
+    const camId = selectedCamera?.db_id || selectedCamera?.id || null
+    const camParam = camId ? `&camera=${camId}` : ''
+    const params   = new URLSearchParams({ date: selectedDate, shift: selectedShift })
 
     const requests = [
-      fetch(`/api/hourly-trend?${params}`).then(r => r.ok ? r.json() : []),
-      fetch(`/api/minute-trend?${params}`).then(r => r.ok ? r.json() : []),
-      fetch(`/api/ppe-compliance-summary?date=${selectedDate}`).then(r => r.ok ? r.json() : {}),
-      fetch(`/api/safe-workers-7day?date=${selectedDate}`).then(r => r.ok ? r.json() : []),
-      fetch(`/api/shift-safe-summary?date=${selectedDate}`).then(r => r.ok ? r.json() : {}),
-      fetch(`/api/camera-safe-summary?date=${selectedDate}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/hourly-trend?${params}${camParam}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/minute-trend?${params}${camParam}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/ppe-compliance-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : {}),
+      fetch(`/api/safe-workers-7day?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : []),
+      fetch(`/api/shift-safe-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : {}),
+      fetch(`/api/camera-safe-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : []),
     ]
 
     Promise.all(requests)
@@ -169,9 +170,9 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         setCameraSafe([])
         setIsLoading(false)
       })
-  }, [selectedDate, selectedShift])
+  }, [selectedDate, selectedShift, selectedCamera])
 
-  // ── camera polling ─────────────────────────────────────────────────────────
+  // ── camera polling ─────────────────────────────────────────────────────
   useEffect(() => {
     const load = () => getCameras().then(setCameras).catch(() => {})
     load()
@@ -179,7 +180,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     return () => clearInterval(id)
   }, [])
 
-  // ── chart ──────────────────────────────────────────────────────────────────
+  // ── chart ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!chartRef.current) return
     if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null }
@@ -195,41 +196,25 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     } else {
       if (!trendData || trendData.length === 0) return
       let chartData = trendData
-      // if (trendData.length === 1) {
-      //   const hour     = trendData[0].hour.split(':')[0]
-      //   const prevHour = `${String(Math.max(0,  parseInt(hour) - 1)).padStart(2, '0')}:00`
-      //   const nextHour = `${String(Math.min(23, parseInt(hour) + 1)).padStart(2, '00')}:00`
-      //   chartData = [
-      //     { hour: prevHour, workers_active: 0, violations: 0 },
-      //     ...trendData,
-      //     { hour: nextHour, workers_active: 0, violations: 0 },
-      //   ]
-      // }
+      if (trendData.length === 1) {
+        const hour     = trendData[0].hour.split(':')[0]
+        const prevHour = `${String(Math.max(0,  parseInt(hour) - 1)).padStart(2, '0')}:00`
+        const nextHour = `${String(Math.min(23, parseInt(hour) + 1)).padStart(2, '00')}:00`
+        chartData = [
+          { hour: prevHour, workers_active: 0, violations: 0 },
+          ...trendData,
+          { hour: nextHour, workers_active: 0, violations: 0 },
+        ]
+      }
       chartLabels    = chartData.map(d => d.hour)
       workersData    = chartData.map(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)))
       violationsData = chartData.map(d => d.violations)
     }
 
-    const ctx = chartRef.current.getContext('2d')
-
+    const ctx      = chartRef.current.getContext('2d')
     const datasets = [
-      showTotal && {
-        label:                'Total workers',
-        data:                 viewMode === 'minute'
-                                ? minuteData.map(d => d.workers_active || 0)
-                                : (trendData || []).map(d => d.workers_active || 0),
-        borderColor:          '#3b9eff',
-        backgroundColor:      'rgba(59,158,255,0.05)',
-        fill:                 true,
-        tension:              0.4,
-        pointRadius:          isMinuteMode ? 0 : 4,
-        pointHoverRadius:     isMinuteMode ? 4 : 5,
-        pointBackgroundColor: '#3b9eff',
-        borderWidth:          2,
-        order:                1,
-      },
       showSafe && {
-        label:                'Safe workers',
+        label:                'Safe Workers',
         data:                 workersData,
         borderColor:          '#22c55e',
         backgroundColor:      'rgba(34,197,94,0.10)',
@@ -305,8 +290,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                     const lbl = chartLabels[index]
                     if (!lbl) return null
                     const [h] = lbl.split(':')
-                    const firstIndexOfHour = chartLabels.findIndex(l => l.startsWith(h + ':'))
-                    return index === firstIndexOfHour ? h : null
+                    const firstIdx = chartLabels.findIndex(l => l.startsWith(h + ':'))
+                    return index === firstIdx ? h : null
                   }
                 : function(_, index) {
                     const lbl = chartLabels[index]
@@ -317,7 +302,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             grid:  { color: 'rgba(255,255,255,0.04)' },
             title: {
               display: true,
-              text:    isMinuteMode ? 'Hour (all minute values shown between ticks)' : 'Hour',
+              text:    isMinuteMode ? 'Hour' : 'Hour',
               color:   '#5a6a82',
               font:    { size: 11 },
             },
@@ -346,12 +331,12 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     }
   }, [trendData, minuteData, viewMode, showSafe, showViols])
 
-  // ── helpers ────────────────────────────────────────────────────────────────
+  // ── helpers ────────────────────────────────────────────────────────────
   const ackAlert      = (id) => setAckedIds(prev => new Set([...prev, id]))
   const visibleAlerts = (alerts || []).filter(a =>
     !ackedIds.has(a._id) && a.timestamp?.startsWith(selectedDate)
   )
-  const alertCount        = visibleAlerts.length
+
   const displaySafe       = daySafe
   const displayViolated   = dayViolated
   const displayTotal      = displaySafe + displayViolated
@@ -361,15 +346,15 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
   const maxSafe       = trendData ? Math.max(...trendData.map(d => Math.max(0, (d.workers_active||0) - (d.violations||0))), 0) : 0
   const maxViolations = trendData ? Math.max(...trendData.map(d => d.violations), 0) : 0
-  const maxSHour      = trendData?.find(d => Math.max(0,(d.workers_active||0)-(d.violations||0)) === maxSafe)?.hour     || '--'
+  const maxSHour      = trendData?.find(d => Math.max(0,(d.workers_active||0)-(d.violations||0)) === maxSafe)?.hour || '--'
   const maxVHour      = trendData?.find(d => d.violations === maxViolations)?.hour || '--'
 
   const todaySafe  = safeWorkers7day.find(d => d.date === selectedDate)?.safe_count ?? 0
   const todayViols = safeWorkers7day.find(d => d.date === selectedDate)?.violations ?? 0
 
-  const chartTitle   = `📈 Safe Workers vs Violations — ${viewMode === 'minute' ? 'Per-Minute Trend' : 'Hourly Trend'}`
-  const shiftLabel   = selectedShift === 'day' ? 'Day' : selectedShift === 'night' ? 'Night' : 'All'
-  const canvasVisible = viewMode === 'hourly' ? (trendData?.length > 1) : (minuteData.length > 0)
+  const shiftLabel    = selectedShift === 'day' ? 'Day' : selectedShift === 'night' ? 'Night' : 'All'
+  const canvasVisible = viewMode === 'hourly' ? (trendData?.length > 0) : (minuteData.length > 0)
+  const chartTitle    = `📈 Safe Workers vs Violations${selectedCamera ? ` · ${selectedCamera.id}` : ''} — ${viewMode === 'minute' ? 'Per-Minute' : 'Hourly'} Trend`
 
   return (
     <div className="screen active" id="screen-safety-dashboard">
@@ -378,83 +363,92 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div className="panel-title">📹 Live Camera Grid</div>
+          {/* Camera filter pill */}
+          {selectedCamera && (
+            <div style={{
+              display:      'flex',
+              alignItems:   'center',
+              gap:          6,
+              padding:      '3px 10px',
+              background:   'rgba(59,130,246,0.12)',
+              border:       '1px solid rgba(59,130,246,0.35)',
+              borderRadius: 20,
+              fontSize:     11,
+              color:        '#93c5fd',
+              fontFamily:   'monospace',
+            }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', display: 'inline-block' }} />
+              Filtering: {selectedCamera.id}
+              <button
+                onClick={() => setSelectedCamera(null)}
+                style={{
+                  background: 'none', border: 'none', color: '#64748b',
+                  cursor: 'pointer', fontSize: 13, padding: '0 2px', lineHeight: 1,
+                }}
+                title="Clear camera filter"
+              >✕</button>
+            </div>
+          )}
         </div>
         <div className="panel-body">
-          <LocationCameraPanel cameras={cameras} />
+          <LocationCameraPanel
+            cameras={cameras}
+            onCamSelect={(cam) => {
+              let dbId = cam.db_id
+              if (!dbId) {
+                for (const loc of CAMERA_LOCATIONS) {
+                  // Check location-level cameras
+                  const allCams = loc.cameras || loc.subLocations?.flatMap(s => s.cameras) || []
+                  // cam.id might be comma-separated (multi-cam location) — check first cam
+                  const firstId = cam.id?.split(',')[0]?.trim()
+                  const found = allCams.find(c => c.id === firstId)
+                  if (found?.db_id) { dbId = found.db_id; break }
+                }
+              }
+              setSelectedCamera({ ...cam, db_id: dbId })
+            }}
+            />
         </div>
       </div>
 
-      {/* 2. DATE BAR — with calendar + Active Alerts checkbox */}
-      <div
-        style={{
-          position:       'relative',
-          display:        'flex',
-          alignItems:     'center',
-          justifyContent: 'space-between',
-          flexWrap:       'wrap',
-          gap:            16,
-          background:     '#111c2d',
-          border:         '1px solid rgba(255,255,255,0.08)',
-          borderRadius:   12,
-          padding:        '5px 14px',
-          marginBottom:   10,
-        }}
-      >
-        {/* Left — date picker */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          <span style={{ color: '#cbd5e1', fontSize: 14 }}>📅 Viewing data for:</span>
-
-          <div ref={calRef} style={{ position: 'relative', display: 'inline-block' }}>
-            <button
-              onClick={() => setCalOpen(v => !v)}
-              style={{
-                display:    'flex',
-                alignItems: 'center',
-                gap:        6,
-                padding:    '8px 14px',
-                border:     '1px solid var(--border)',
-                borderRadius: 8,
-                background: 'var(--bg-panel)',
-                color:      'var(--text-primary)',
-                fontSize:   14,
-                cursor:     'pointer',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 600,
-              }}
-            >
-              📅 {selectedDate} ▾
-            </button>
-            {calOpen && (
-              <div style={{
-                position:   'absolute',
-                top:        'calc(100% + 6px)',
-                left:       0,
-                zIndex:     999,
-                boxShadow:  '0 8px 32px rgba(0,0,0,0.2)',
-                borderRadius: 8,
-                background: 'var(--bg-panel)',
-                border:     '1px solid var(--border)',
-              }}>
-                <MiniCalendar
-                  selectedDate={selectedDate}
-                  onSelect={date => { onDateChange(date); setCalOpen(false) }}
-                />
-              </div>
-            )}
-          </div>
-
-          <span style={{ color: '#64748b', fontSize: 14, fontStyle: 'italic' }}>
-            
-          </span>
+      {/* 2. DATE BAR */}
+      <div className="date-bar" style={{ position: 'relative' }}>
+        <span className="date-bar-label">📅 Viewing data for:</span>
+        <div ref={calRef} style={{ position: 'relative', display: 'inline-block' }}>
+          <button
+            onClick={() => setCalOpen(v => !v)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              background: 'var(--bg-panel)',
+              color: 'var(--text-primary)',
+              fontSize: 13,
+              cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            📅 {selectedDate} ▾
+          </button>
+          {calOpen && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0,
+              zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+              borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)',
+            }}>
+              <MiniCalendar
+                selectedDate={selectedDate}
+                onSelect={date => { onDateChange(date); setCalOpen(false) }}
+              />
+            </div>
+          )}
         </div>
-
+        <span className="date-bar-hint">← change date to update all stats</span>
       </div>
-      {/* ── pulse keyframe ── */}
-      <style>{`@keyframes alertPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
 
       {/* 3. STAT CARDS PANEL */}
       <StatCardsPanel
-        onToggleAlerts={() => setShowAlertsPanel(v => !v)}
         isLoading={isLoading}
         todaySafe={todaySafe}
         todayViols={todayViols}
@@ -472,7 +466,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         visibleAlerts={visibleAlerts}
         ackAlert={ackAlert}
         selectedDate={selectedDate}
-        showAlertsPanel={showAlertsPanel}
+        selectedCamera={selectedCamera}
+        onClearCamera={() => setSelectedCamera(null)}
       />
 
       {/* 4. TREND CHART */}
@@ -483,10 +478,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           <div className="panel-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
 
             {/* Legend */}
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
-              <span style={{ display: 'inline-block', width: 22, height: 3, background: '#3b9eff', borderRadius: 2 }} />
-              Total workers
-            </span>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
                 <span style={{ display: 'inline-block', width: 22, height: 3, background: '#22c55e', borderRadius: 2 }} />
@@ -494,27 +485,21 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
                 <span style={{
-                  display:      'inline-block',
-                  width:        22,
-                  height:       3,
-                  borderRadius: 2,
-                  background:   'repeating-linear-gradient(90deg,#e53e3e 0 5px,transparent 5px 9px)',
+                  display: 'inline-block', width: 22, height: 3, borderRadius: 2,
+                  background: 'repeating-linear-gradient(90deg,#e53e3e 0 5px,transparent 5px 9px)',
                 }} />
                 Violations
               </span>
             </div>
 
             {/* Hourly / Per Minute toggle */}
-            <div style={{ display:'flex', border:'1px solid var(--border)', borderRadius:4, overflow:'hidden', fontSize:12 }}>
+            <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', fontSize: 12 }}>
               {['hourly', 'minute'].map(mode => (
                 <button
                   key={mode}
                   onClick={() => setViewMode(mode)}
                   style={{
-                    padding:    '3px 10px',
-                    border:     'none',
-                    cursor:     'pointer',
-                    fontSize:   12,
+                    padding: '3px 10px', border: 'none', cursor: 'pointer', fontSize: 12,
                     background: viewMode === mode ? 'var(--blue-vivid)' : 'var(--bg-panel)',
                     color:      viewMode === mode ? '#fff' : 'var(--text-muted)',
                     transition: 'background 0.15s',
@@ -530,33 +515,21 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               <button
                 onClick={() => setChartCalOpen(v => !v)}
                 style={{
-                  display:      'flex',
-                  alignItems:   'center',
-                  gap:          6,
-                  padding:      '3px 10px',
-                  border:       '1px solid var(--border)',
-                  borderRadius: 4,
-                  background:   chartCalOpen ? 'rgba(241,238,246,0.18)' : 'var(--bg-panel)',
-                  color:        chartCalOpen ? '#c4b5fd' : 'var(--text-primary)',
-                  fontSize:     12,
-                  cursor:       'pointer',
-                  fontFamily:   'var(--font-mono)',
-                  whiteSpace:   'nowrap',
-                  transition:   'background 0.15s, color 0.15s',
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+                  border: '1px solid var(--border)', borderRadius: 4,
+                  background: chartCalOpen ? 'rgba(241,238,246,0.18)' : 'var(--bg-panel)',
+                  color: chartCalOpen ? '#c4b5fd' : 'var(--text-primary)',
+                  fontSize: 12, cursor: 'pointer', fontFamily: 'var(--font-mono)',
+                  whiteSpace: 'nowrap', transition: 'background 0.15s, color 0.15s',
                 }}
               >
                 📅 {selectedDate} ▾
               </button>
               {chartCalOpen && (
                 <div style={{
-                  position:   'absolute',
-                  top:        'calc(100% + 6px)',
-                  right:      0,
-                  zIndex:     999,
-                  boxShadow:  '0 8px 32px rgba(0,0,0,0.2)',
-                  borderRadius: 8,
-                  background: 'var(--bg-panel)',
-                  border:     '1px solid var(--border)',
+                  position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+                  zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+                  borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)',
                 }}>
                   <MiniCalendar
                     selectedDate={selectedDate}
@@ -571,13 +544,9 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               value={selectedShift}
               onChange={e => setSelectedShift(e.target.value)}
               style={{
-                background:   'var(--bg-panel)',
-                color:        'var(--text-primary)',
-                border:       '1px solid var(--border)',
-                borderRadius: 4,
-                padding:      '3px 8px',
-                fontSize:     12,
-                cursor:       'pointer',
+                background: 'var(--bg-panel)', color: 'var(--text-primary)',
+                border: '1px solid var(--border)', borderRadius: 4,
+                padding: '3px 8px', fontSize: 12, cursor: 'pointer',
               }}
             >
               <option value="day"   style={{ background: '#1a2236', color: '#e2e8f0' }}>☀️ Day Shift (06:00–18:00)</option>
@@ -587,28 +556,20 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
             {/* Checkbox filters */}
             <div style={{
-              display:      'flex',
-              alignItems:   'center',
-              gap:          10,
-              padding:      '4px 10px',
-              border:       '1px solid var(--border)',
-              borderRadius: 4,
-              background:   'var(--bg-panel)',
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '4px 10px', border: '1px solid var(--border)',
+              borderRadius: 4, background: 'var(--bg-panel)',
             }}>
               <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'#22c55e', cursor:'pointer', userSelect:'none' }}>
                 <input
-                  type="checkbox"
-                  checked={showSafe}
-                  onChange={e => setShowSafe(e.target.checked)}
+                  type="checkbox" checked={showSafe} onChange={e => setShowSafe(e.target.checked)}
                   style={{ accentColor:'#22c55e', cursor:'pointer', width:13, height:13 }}
                 />
                 Safe workers
               </label>
               <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'#e53e3e', cursor:'pointer', userSelect:'none' }}>
                 <input
-                  type="checkbox"
-                  checked={showViols}
-                  onChange={e => setShowViols(e.target.checked)}
+                  type="checkbox" checked={showViols} onChange={e => setShowViols(e.target.checked)}
                   style={{ accentColor:'#e53e3e', cursor:'pointer', width:13, height:13 }}
                 />
                 Violations
@@ -623,19 +584,13 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           {((viewMode === 'hourly' && trendData && trendData.length > 0) ||
             (viewMode === 'minute' && minuteData && minuteData.length > 0)) && (
             <div style={{
-              display:      'flex',
-              gap:          16,
-              marginBottom: 12,
-              padding:      '8px 12px',
-              background:   'var(--bg-base)',
-              borderRadius: 6,
-              fontSize:     12,
-              flexWrap:     'wrap',
+              display: 'flex', gap: 16, marginBottom: 12, padding: '8px 12px',
+              background: 'var(--bg-base)', borderRadius: 6, fontSize: 12, flexWrap: 'wrap',
             }}>
               {viewMode === 'hourly' ? (
                 <>
                   <span style={{ color: 'var(--green-safe)' }}>
-                    👷 Peak Safe Workers: <strong>{maxSafe}</strong>
+                    👷 Peak Safe: <strong>{maxSafe}</strong>
                     <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>@ {maxSHour}</span>
                   </span>
                   <span style={{ color: 'var(--text-muted)' }}>|</span>
@@ -670,12 +625,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                         <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>@ {minMaxVTime}</span>
                       </span>
                       <span style={{ color: 'var(--text-muted)' }}>|</span>
-                      <span style={{ color: 'var(--text-muted)' }}>
-                        Total Readings: <strong>{minuteData.length} mins</strong>
-                      </span>
-                      <span style={{ color: 'var(--text-muted)' }}>|</span>
                       <span style={{ color: 'var(--green-safe)', fontStyle: 'italic' }}>
-                        ✅ Real data — {minuteData.length} minute readings from DB
+                        ✅ {minuteData.length} minute readings
                       </span>
                     </>
                   )
@@ -689,31 +640,23 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             <canvas
               ref={chartRef}
               style={{
-                position: 'absolute',
-                inset:    0,
-                width:    '100%',
-                height:   '100%',
-                opacity:  canvasVisible ? 1 : 0,
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                opacity: canvasVisible ? 1 : 0,
               }}
             />
             {isLoading && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-                Loading data for {selectedDate}…
+                Loading data{selectedCamera ? ` for ${selectedCamera.id}` : ''} · {selectedDate}…
               </div>
             )}
             {!isLoading && viewMode === 'hourly' && (!trendData || trendData.length === 0) && (
-            <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-              No data for {shiftLabel} Shift · {selectedDate}
-            </div>
-          )}
-          {!isLoading && viewMode === 'hourly' && trendData?.length === 1 && (
-            <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-              Only 1 hour of data at {trendData[0].hour} — chart will fill as the shift progresses
-            </div>
-          )}
+              <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
+                No data for {shiftLabel} Shift · {selectedDate}{selectedCamera ? ` · ${selectedCamera.id}` : ''}
+              </div>
+            )}
             {!isLoading && viewMode === 'minute' && minuteData.length === 0 && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-                No per-minute data for {shiftLabel} Shift · {selectedDate}
+                No per-minute data for {shiftLabel} Shift · {selectedDate}{selectedCamera ? ` · ${selectedCamera.id}` : ''}
               </div>
             )}
           </div>
@@ -724,7 +667,10 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">🦺 PPE Compliance — Shift Summary</div>
-          <div className="panel-subtitle">Helmet &amp; Vest · {selectedDate}</div>
+          <div className="panel-subtitle">
+            Helmet &amp; Vest · {selectedDate}
+            {selectedCamera && <span style={{ color: '#93c5fd', marginLeft: 8 }}>· {selectedCamera.id}</span>}
+          </div>
         </div>
         <div className="panel-body">
           <div className="grid-3">
@@ -740,11 +686,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                     <div style={{ width: 110, fontSize: 12 }}>{item.label}</div>
                     <div style={{ flex: 1, background: 'var(--bg-base)', borderRadius: 3, height: 8 }}>
                       <div style={{
-                        width:        `${item.pct}%`,
-                        height:       '100%',
-                        background:   item.color,
-                        borderRadius: 3,
-                        transition:   'width 0.4s',
+                        width: `${item.pct}%`, height: '100%',
+                        background: item.color, borderRadius: 3, transition: 'width 0.4s',
                       }} />
                     </div>
                     <div className="text-mono text-xs" style={{ color: item.color, width: 34 }}>{item.pct}%</div>
@@ -767,11 +710,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                     </div>
                     <div style={{ background: 'var(--bg-base)', borderRadius: 3, height: 6 }}>
                       <div style={{
-                        width:        `${pct}%`,
-                        height:       '100%',
-                        background:   '#4ade80',
-                        borderRadius: 3,
-                        transition:   'width 0.4s',
+                        width: `${pct}%`, height: '100%',
+                        background: '#4ade80', borderRadius: 3, transition: 'width 0.4s',
                       }} />
                     </div>
                   </div>
@@ -799,7 +739,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                       className="spark-bar"
                       title={`${d.hour} — ${d.violations} violations`}
                       style={{
-                        height:     `${h || 5}%`,
+                        height: `${h || 5}%`,
                         background: h > 60 ? 'var(--red-alert)' : h > 30 ? 'var(--amber)' : 'var(--blue-vivid)',
                       }}
                     />
@@ -812,7 +752,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                 </div>
               )}
               <div className="text-xs text-muted" style={{ marginTop: 4 }}>
-                {selectedShift === 'day' ? '☀️ Day' : selectedShift === 'night' ? '🌙 Night' : '🔄 All'} Shift violations · {selectedDate}
+                {selectedShift === 'day' ? '☀️ Day' : selectedShift === 'night' ? '🌙 Night' : '🔄 All'} Shift · {selectedDate}
               </div>
             </div>
 
