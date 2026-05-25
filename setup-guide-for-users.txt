@@ -1,0 +1,223 @@
+================================================================
+      YOLOIntel Safety Dashboard — SETUP GUIDE FOR USERS
+      Construction PPE Monitoring System (L&T Project)
+================================================================
+
+PROJECT OVERVIEW
+----------------
+This system monitors construction site workers for PPE (helmet,
+vest) compliance using RTSP cameras, YOLO AI detection, MongoDB,
+and a React dashboard.
+
+
+================================================================
+STEP 1 — INSTALL REQUIRED SOFTWARE (ONE TIME ONLY)
+================================================================
+
+1A. Install Python 3.11+
+    → Download: https://www.python.org/downloads/
+    → During install, CHECK "Add Python to PATH"
+    → Verify: python --version
+
+1B. Install Node.js (includes npm)
+    → Download: https://nodejs.org/  (LTS version)
+    → OR via winget:
+         winget install OpenJS.NodeJS
+    → Verify: node -v   and   npm -v
+
+1C. Install FFmpeg  (REQUIRED for cameras and HLS streaming)
+    → Download: https://ffmpeg.org/download.html
+    → Choose: Windows builds by BtbN
+              ffmpeg-master-latest-win64-gpl.zip
+    → Extract the zip → open the bin/ folder inside
+    → Copy that bin/ path (e.g. C:\ffmpeg\bin)
+    → Add to Windows Environment Variables:
+         System Properties → Environment Variables
+         → Under "System Variables" → select Path → Edit
+         → New → paste the bin/ path → OK
+    → Verify: ffmpeg -version
+
+1D. Install MongoDB Community Edition
+    → Download: https://www.mongodb.com/try/download/community
+    → Install with default settings
+    MongoDB Compass  → https://www.mongodb.com/products/compass
+    → Use MongoDB Compass to connect using the same URL and create database: construction_monitor
+    → Verify: mongod --version
+    → MongoDB runs on: mongodb://localhost:27017
+
+================================================================
+STEP 2 — CLONE / DOWNLOAD THE PROJECT
+================================================================
+
+Download or clone the project from GitHub:
+  Branch : L_T_Dashboard
+  URL    : https://github.com/varsha-sonnad/L-T-project/tree/L_T_Dashboard
+
+Place the project folder at a path like:
+  C:\Users\<your-name>\Desktop\yolo-frontend\
+
+================================================================
+STEP 3 — SET UP PYTHON VIRTUAL ENVIRONMENT(Optional)
+================================================================
+
+Open PowerShell or CMD in the project folder and run:
+
+  python -m venv venv
+
+Activate it:
+
+  On Windows:
+    .\venv\Scripts\activate
+
+  On Mac/Linux:
+    source venv/bin/activate
+
+You should see (venv) at the start of your terminal prompt.
+
+================================================================
+STEP 4 — INSTALL ALL DEPENDENCIES
+================================================================
+
+------------------------------------------------------------
+4A. Python Dependencies  (run with venv activated)
+------------------------------------------------------------
+
+  pip install -r requirements.txt
+
+If no requirements.txt exists, install manually:
+
+  pip install opencv-python numpy
+  pip install pymongo
+  pip install ultralytics
+  pip install openai
+  pip install fastapi uvicorn
+  pip install python-dotenv
+  pip install reportlab
+  pip install torch torchvision
+
+Full Python packages and their purpose:
+  - fastapi           → REST API framework for the backend
+  - uvicorn           → ASGI server to run FastAPI
+  - pymongo           → Python MongoDB driver
+  - opencv-python     → Image/video processing
+  - numpy             → Array and matrix operations
+  - ultralytics       → YOLOv8 object detection (person + PPE)
+  - openai            → GPT-4o AI chatbot integration
+  - python-dotenv     → Loads .env config file
+  - reportlab         → PDF report generation
+  - torch torchvision → PyTorch (required by ultralytics/YOLO)
+
+------------------------------------------------------------
+4B. Node.js Dependencies
+------------------------------------------------------------
+
+In the project folder (where package.json is):
+
+  npm install
+
+If starting fresh without package.json:
+
+  npm init -y
+  npm install express mongodb fluent-ffmpeg cors
+
+Node.js packages and their purpose:
+  - express       → HTTP server for snapshot API
+  - mongodb       → Node.js MongoDB driver
+  - fluent-ffmpeg → RTSP snapshot capture + HLS streaming
+  - cors          → Cross-origin request support
+
+================================================================
+STEP 5 — CREATE THE .env FILE
+================================================================
+
+Create a file named  .env  in the ROOT of the project folder.
+Add the following lines:
+
+  MONGO_URL=mongodb://localhost:27017
+  DB_NAME=construction_monitor
+  INTERVAL=10000
+  OPENAI_API_KEY=your-openai-api-key-here
+
+Notes:
+  - INTERVAL = how often snapshots are taken in milliseconds
+               10000 = every 10 seconds
+  - Get your OpenAI API key: https://platform.openai.com/api-keys
+  - NEVER share or commit this .env file to Git
+  - The .env file must be in the same folder as main.py
+
+================================================================
+RUNNABLE FILES — IN ORDER TO RUN
+================================================================
+
+Open a SEPARATE terminal window for each service.
+  1. node index1.js
+     Captures RTSP snapshots every 10s → saves to MongoDB
+     Serves HLS streams → http://localhost:3001
+
+  2. python collage_maker.py
+     Runs YOLOv8 person detection → builds person grid collages
+     Saves to MongoDB + collages_output/ every 50s
+
+  3. python analyze_ppe.py
+     Detects helmet/vest on each person → writes to ppe_results
+     Flags: no_helmet, no_vest, both_missing
+
+  4. npm run dev                                      
+     Starts Vite development server                    
+     Proxies /api  → http://localhost:8000             
+     Proxies /hls  → http://localhost:8000            
+                                                     
+     Open in browser: http://localhost:5173 
+
+  5. python main.py
+     FastAPI REST API + GPT-4o chatbot + PDF reports
+     → http://localhost:8000  (API docs: /docs)
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+  ffmpeg not found
+  → Make sure FFmpeg bin/ folder is in Windows PATH
+  → Restart terminal after adding to PATH
+  → Test: ffmpeg -version
+
+  MongoDB connection refused
+  → Start MongoDB: mongod
+  → Or check if it runs as a Windows service (services.msc)
+  → Try: net start MongoDB
+
+  YOLO model not found (yolov8n.pt)
+  → It downloads automatically on first run
+  → Requires internet connection the first time
+
+  OpenAI chatbot not working
+  → Check OPENAI_API_KEY in your .env file
+  → Verify key at: https://platform.openai.com
+
+  Camera RTSP not connecting
+  → Verify camera RTSP URLs in index1.js and main.py
+  → Check network access to camera IP (106.51.96.174)
+
+  Collages not saving to disk
+  → Check COLLAGE_SAVE_DIR path in collage_maker.py
+  → Create the folder if missing: mkdir collages_output
+
+  React app shows blank or API errors
+  → Make sure python main.py is running on port 8000
+  → Check vite.config.js proxy target is http://localhost:8000
+
+
+
+================================================================
+USEFUL LINKS
+================================================================
+
+  MongoDB Compass (GUI)    https://www.mongodb.com/products/compass
+  FFmpeg Download          https://ffmpeg.org/download.html
+  YOLOv8 Documentation     https://docs.ultralytics.com
+  OpenAI API Keys          https://platform.openai.com/api-keys
+  FastAPI Documentation    https://fastapi.tiangolo.com
+  Node.js Download         https://nodejs.org/
+
+================================================================
