@@ -63,8 +63,7 @@
   --bg-base:       #080d18;    /* Page / outermost background         */
   --bg-surface:    #0c1220;    /* Sidebar, topbar, card backgrounds   */
   --bg-elevated:   #101928;    /* Elevated cards, form inputs         */
-  --bg-hover:      #141f30;   /* Hover state on interactive elements */
-  --bg-panel:      #0c1220;   /* Panel backgrounds                   */
+  --bg-hover:      #141f30;    /* Hover state on interactive elements */
 
   /* Borders */
   --border:        rgba(255,255,255,0.07);
@@ -73,8 +72,8 @@
 
   /* Text hierarchy */
   --text-primary:   #e8edf5;   /* Main readable text                  */
-  --text-secondary: #a0aec0;   /* Supporting / label text             */
-  --text-muted:     #5a6a82;   /* Subdued / meta text                 */
+  --text-secondary: #dde4ef;   /* Supporting / label text             */
+  --text-muted:     #b8c5d4;  /* Subdued / meta text                 */
 
   /* Semantic colours */
   --green-safe:  #22c55e;
@@ -270,7 +269,7 @@ button { cursor: pointer; }
 .status-pill {
   display: flex; align-items: center; gap: 6px;
   background: var(--green-dim);
-  border: 1px solid rgba(34,197,94,0.2);
+  border: 1px solid rgba(0, 0, 0, 0.2);
   border-radius: 20px; padding: 4px 12px;
   font-size: 11px; font-weight: 600; color: var(--green-safe);
   font-family: var(--font-mono);
@@ -943,6 +942,7 @@ button { cursor: pointer; }
    Bell icon in topbar + slide-out right-side panel.
    Panel position transitions from right:-340px → right:0.
    ============================================================ */
+
 /* Bell icon button */
 #notif-bell {
   position: relative; cursor: pointer;
@@ -1020,9 +1020,9 @@ body.light-mode {
   --border:        rgba(0,0,0,0.09);
   --border-strong: rgba(0,0,0,0.16);
   --text-primary:  #1a2537;
-  --text-secondary:#4a5568;
-  --text-muted:    #8896aa;
-  --bg-panel:     #ffffff; 
+  --text-primary:  #0f1623;   /* near-black                      */
+  --text-secondary:#2d3748;   /* dark grey, clearly readable      */
+  --text-muted:    #4a5568;   /* medium-dark, visible on white    */
 }
 body.light-mode .panel,
 body.light-mode .stat-card { box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
@@ -1774,3 +1774,130 @@ body.light-mode .date-picker { color-scheme: light; }
 .replay-action-btn:hover    { background: var(--bg-hover); color: var(--text-primary); }
 .replay-action-btn.primary  { background: var(--blue-vivid); border-color: var(--blue-vivid); color: #fff; }
 .replay-action-btn.primary:hover { background: #2d8de8; }
+
+
+/* ============================================================
+   TYPOGRAPHY SIZE & WEIGHT OVERRIDES
+   Applied on top of existing styles — paste at END of style.css
+   ============================================================ */
+
+/* Base */
+body                     { font-size: 15px; }
+
+/* Topbar */
+.topbar-title            { font-size: 22px; font-weight: 800; }
+.topbar-sub              { font-size: 13px; }
+.topbar-btn              { font-size: 13px; font-weight: 600; }
+#live-clock              { font-size: 14px; font-weight: 600; }
+.status-pill             { font-size: 13px; font-weight: 700; }
+
+/* Screen tabs */
+.screen-tab              { font-size: 14px; font-weight: 600; }
+
+/* Sidebar */
+.sidebar-label           { font-size: 11px; font-weight: 700; }
+.nav-item                { font-size: 14px; font-weight: 600; }
+.user-info .name         { font-size: 14px; font-weight: 700; }
+.user-info .role         { font-size: 13px; }
+
+/* KPI / Stat Cards */
+.stat-label              { font-size: 12px; font-weight: 700; }
+.stat-value              { font-size: 38px; }
+.stat-delta              { font-size: 13px; }
+
+/* Panels */
+.panel-title             { font-size: 17px; font-weight: 800; }
+.panel-subtitle          { font-size: 13px; }
+
+/* Dev note */
+.dev-note                { font-size: 13px; font-weight: 500; }
+
+/* Date bar */
+.date-bar-label          { font-size: 14px; font-weight: 600; }
+.date-bar-hint           { font-size: 13px; }
+.date-picker             { font-size: 13px; }
+
+/* Alert feed */
+.alert-type              { font-size: 12px; font-weight: 800; }
+.alert-msg               { font-size: 14px; font-weight: 500; }
+.alert-meta              { font-size: 12px; }
+.alert-ack               { font-size: 11px; font-weight: 700; }
+
+/* Chips & badges */
+.chip                    { font-size: 12px; padding: 3px 10px; }
+.ppe-badge               { font-size: 12px; padding: 3px 9px; }
+.status-chip             { font-size: 12px; padding: 3px 9px; }
+.score-num               { font-size: 13px; font-weight: 700; }
+.nav-badge               { font-size: 11px; }
+
+/* Tables */
+.compliance-table        { font-size: 14px; }
+.score-table             { font-size: 14px; }
+.gantt-table             { font-size: 14px; }
+
+.compliance-table th,
+.score-table th,
+.gantt-table th          { font-size: 11px; font-weight: 800; }
+
+/* Milestones */
+.milestone-name          { font-size: 15px; font-weight: 700; }
+.milestone-status        { font-size: 12px; font-weight: 800; }
+.milestone-date          { font-size: 12px; }
+
+/* Zone map */
+.zone-count              { font-size: 28px; }
+.zone-name               { font-size: 12px; font-weight: 700; }
+.zone-type-badge         { font-size: 10px; }
+
+/* Photo gallery */
+.photo-milestone         { font-size: 14px; font-weight: 700; }
+.photo-meta              { font-size: 12px; }
+
+/* Owner portal */
+.owner-title             { font-size: 34px; }
+.owner-meta              { font-size: 13px; }
+.ev-label                { font-size: 11px; font-weight: 800; }
+.ev-value                { font-size: 32px; }
+.ev-sub                  { font-size: 12px; }
+
+/* Reports */
+.report-name             { font-size: 14px; font-weight: 700; }
+.report-meta             { font-size: 12px; }
+
+/* Toggles */
+.toggle-name             { font-size: 14px; font-weight: 600; }
+.toggle-desc             { font-size: 12px; }
+
+/* Settings nav */
+.settings-nav-item       { font-size: 14px; }
+
+/* Forms */
+.form-label              { font-size: 12px; font-weight: 800; }
+.form-input,
+.form-select             { font-size: 14px; }
+
+/* Notifications */
+.notif-header-title      { font-size: 17px; }
+.notif-msg               { font-size: 13px; font-weight: 500; }
+.notif-time              { font-size: 12px; }
+
+/* Modals */
+.modal-title             { font-size: 20px; font-weight: 800; }
+.profile-row             { font-size: 14px; }
+.history-item            { font-size: 13px; font-weight: 500; }
+.handover-heading        { font-size: 20px; }
+.handover-subhead        { font-size: 12px; font-weight: 800; }
+.handover-row            { font-size: 14px; }
+.handover-meta           { font-size: 12px; }
+
+/* Simulator */
+.sim-row                 { font-size: 14px; }
+.sim-input               { font-size: 15px; }
+
+/* Replay */
+.replay-title            { font-size: 18px; }
+.replay-sub              { font-size: 12px; }
+.rmc-title               { font-size: 11px; font-weight: 800; }
+.rmc-row                 { font-size: 13px; }
+.rmc-val                 { font-size: 13px; font-weight: 700; }
+.res-event-label         { font-size: 12px; }
