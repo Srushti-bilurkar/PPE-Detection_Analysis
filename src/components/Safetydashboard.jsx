@@ -88,6 +88,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
   const [cameras,          setCameras]          = useState([])
   const [compliance,       setCompliance]       = useState({ helmet: 0, vest: 0 })
+  const [showTotal, setShowTotal] = useState(true)
   const [trendData,        setTrendData]        = useState(null)
   const [minuteData,       setMinuteData]       = useState([])
   const [ackedIds,         setAckedIds]         = useState(new Set())
@@ -97,7 +98,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
   const [isLoading,        setIsLoading]        = useState(false)
   const [viewMode,         setViewMode]         = useState('hourly')
   const [calOpen,          setCalOpen]          = useState(false)
-  const [showAlertsPanel,  setShowAlertsPanel]  = useState(false)   // ← controls alerts panel
+  const [showAlertsPanel,  setShowAlertsPanel]  = useState(false)   
   const calRef      = useRef(null)
   const chartCalRef = useRef(null)
 
@@ -212,6 +213,21 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     const ctx = chartRef.current.getContext('2d')
 
     const datasets = [
+      showTotal && {
+        label:                'Total workers',
+        data:                 viewMode === 'minute'
+                                ? minuteData.map(d => d.workers_active || 0)
+                                : (trendData || []).map(d => d.workers_active || 0),
+        borderColor:          '#3b9eff',
+        backgroundColor:      'rgba(59,158,255,0.05)',
+        fill:                 true,
+        tension:              0.4,
+        pointRadius:          isMinuteMode ? 0 : 4,
+        pointHoverRadius:     isMinuteMode ? 4 : 5,
+        pointBackgroundColor: '#3b9eff',
+        borderWidth:          2,
+        order:                1,
+      },
       showSafe && {
         label:                'Safe workers',
         data:                 workersData,
@@ -380,8 +396,8 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           background:     '#111c2d',
           border:         '1px solid rgba(255,255,255,0.08)',
           borderRadius:   12,
-          padding:        '14px 20px',
-          marginBottom:   20,
+          padding:        '5px 14px',
+          marginBottom:   10,
         }}
       >
         {/* Left — date picker */}
@@ -428,7 +444,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           </div>
 
           <span style={{ color: '#64748b', fontSize: 14, fontStyle: 'italic' }}>
-            ← change date to update all stats
+            
           </span>
         </div>
 
@@ -467,6 +483,10 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           <div className="panel-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
 
             {/* Legend */}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
+              <span style={{ display: 'inline-block', width: 22, height: 3, background: '#3b9eff', borderRadius: 2 }} />
+              Total workers
+            </span>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
                 <span style={{ display: 'inline-block', width: 22, height: 3, background: '#22c55e', borderRadius: 2 }} />

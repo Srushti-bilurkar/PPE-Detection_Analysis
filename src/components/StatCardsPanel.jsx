@@ -46,7 +46,6 @@ function CardChartModal({ card, data, onClose }) {
       }]
     } else if (card.id === 'compliance') {
       yLabel = 'Compliance %'
-      // per-hour compliance
       datasets = [{
         label: 'PPE Compliance %',
         data: trendData.map(d => {
@@ -94,7 +93,7 @@ function CardChartModal({ card, data, onClose }) {
                 if (!items.length) return ''
                 const lbl = items[0].label
                 const hour = parseInt(lbl.split(':')[0])
-                return `${String(hour).padStart(2,'0')}:00 – ${String(hour+1).padStart(2,'00')}:00`
+                return `${String(hour).padStart(2,'0')}:00 – ${String(hour+1).padStart(2,'0')}:00`
               },
             },
           },
@@ -118,7 +117,6 @@ function CardChartModal({ card, data, onClose }) {
     return () => { if (chartInst.current) { chartInst.current.destroy(); chartInst.current = null } }
   }, [card, trendData])
 
-  // peak stats
   const peakStats = () => {
     if (!trendData || trendData.length === 0) return null
     if (card.id === 'workers') {
@@ -164,7 +162,6 @@ function CardChartModal({ card, data, onClose }) {
 
   return (
     <>
-      {/* Backdrop */}
       <div
         onClick={onClose}
         style={{
@@ -174,8 +171,6 @@ function CardChartModal({ card, data, onClose }) {
           zIndex: 900,
         }}
       />
-
-      {/* Modal */}
       <div style={{
         position: 'fixed',
         top: '50%', left: '50%',
@@ -190,7 +185,6 @@ function CardChartModal({ card, data, onClose }) {
         animation: 'scFadeInUp 0.2s ease',
         overflow: 'hidden',
       }}>
-        {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '14px 20px',
@@ -214,12 +208,8 @@ function CardChartModal({ card, data, onClose }) {
           >×</button>
         </div>
 
-        {/* Stats row */}
         {stats && (
-          <div style={{
-            display: 'flex', gap: 0,
-            borderBottom: '1px solid rgba(255,255,255,0.06)',
-          }}>
+          <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
             {stats.map((s, i) => (
               <div key={i} style={{
                 flex: 1, padding: '12px 20px',
@@ -235,7 +225,6 @@ function CardChartModal({ card, data, onClose }) {
           </div>
         )}
 
-        {/* Chart */}
         <div style={{ padding: '16px 20px 20px' }}>
           {trendData && trendData.length > 0 ? (
             <div style={{ position: 'relative', height: 240 }}>
@@ -273,7 +262,6 @@ function StatCard({ icon, label, value, color, sub, compact = false, onClick }) 
         minWidth:     0,
       }}
     >
-      {/* TAP hint */}
       <div style={{
         position: 'absolute', top: 8, right: 10,
         fontSize: 9, color: hover ? color : '#64748b',
@@ -282,7 +270,6 @@ function StatCard({ icon, label, value, color, sub, compact = false, onClick }) 
       }}>
         📈 TAP
       </div>
-
       <div style={{ fontSize: compact ? 18 : 24, marginBottom: compact ? 6 : 12 }}>{icon}</div>
       <div style={{
         fontSize: 8, letterSpacing: '0.08em', color: '#cbd5e1',
@@ -291,7 +278,9 @@ function StatCard({ icon, label, value, color, sub, compact = false, onClick }) 
       }}>{label}</div>
       <div style={{ fontSize: compact ? 32 : 52, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
       {sub && (
-        <div style={{ marginTop: compact ? 6 : 12, fontSize: compact ? 10 : 13, color: '#94a3b8' }}>{sub}</div>
+        <div style={{ marginTop: compact ? 6 : 12, fontSize: compact ? 10 : 13, color: '#94a3b8' }}>
+          {typeof sub === 'string' ? sub : sub}
+        </div>
       )}
     </div>
   )
@@ -465,17 +454,8 @@ export default function StatCardsPanel({
   selectedDate,
   showAlertsPanel,
 }) {
-  const [panelMounted, setPanelMounted] = useState(false)
   const [derivedSafe,  setDerivedSafe]  = useState(null)
-  const [activeModal,  setActiveModal]  = useState(null)   // card id or null
-
-  useEffect(() => {
-    if (showAlertsPanel) {
-      requestAnimationFrame(() => setPanelMounted(true))
-    } else {
-      setPanelMounted(false)
-    }
-  }, [showAlertsPanel])
+  const [activeModal,  setActiveModal]  = useState(null)
 
   // close modal on Escape
   useEffect(() => {
@@ -505,18 +485,40 @@ export default function StatCardsPanel({
     return '—'
   }
 
-  const alertCount   = visibleAlerts?.length ?? 0
+  const alertCount    = visibleAlerts?.length ?? 0
   const activeCardObj = CARDS.find(c => c.id === activeModal)
+  const modalData     = { trendData, displaySafe, displayViolated, displayCompliance, compliance }
 
-  const modalData = {
-    trendData, displaySafe, displayViolated, displayCompliance, compliance,
-  }
+  const bestShift = shiftSafe
+    ? Object.entries(shiftSafe).sort((a,b) => b[1]-a[1])[0]?.[0] || '--'
+    : '--'
+
+  const yesterday         = safeWorkers7day?.slice(-2)?.[0]
+  const today7            = safeWorkers7day?.slice(-1)?.[0]
+  const trendVsYesterday  = (yesterday && today7) ? today7.safe_count - yesterday.safe_count : null
+  const violTrend         = (yesterday && today7) ? today7.violations - yesterday.violations  : null
+
+  // ── derived colours keyed off showAlertsPanel (no lag) ──────────────────────
+  const tabBg     = showAlertsPanel
+    ? alertCount > 0 ? 'rgba(239,68,68,0.18)'    : 'rgba(34,201,132,0.15)'
+    : alertCount > 0 ? 'rgba(239,68,68,0.12)'    : 'rgba(255,255,255,0.04)'
+
+  const tabBorder = showAlertsPanel
+    ? alertCount > 0 ? 'rgba(239,68,68,0.6)'     : 'rgba(34,201,132,0.5)'
+    : alertCount > 0 ? 'rgba(239,68,68,0.4)'     : 'rgba(255,255,255,0.12)'
+
+  const tabColor  = showAlertsPanel
+    ? alertCount > 0 ? '#f87171'                 : '#4ade80'
+    : alertCount > 0 ? '#f87171'                 : '#94a3b8'
 
   return (
     <>
       <style>{`
-        @keyframes scPulse    { 0%,100%{opacity:1} 50%{opacity:0.35} }
-        @keyframes scFadeInUp { from{opacity:0;transform:translate(-50%,-48%)} to{opacity:1;transform:translate(-50%,-50%)} }
+        @keyframes scPulse         { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        @keyframes scFadeInUp      { from{opacity:0;transform:translate(-50%,-48%)} to{opacity:1;transform:translate(-50%,-50%)} }
+        @keyframes scPulseRing     { 0%{box-shadow:0 0 0 0 rgba(239,68,68,0.6)} 70%{box-shadow:0 0 0 10px rgba(239,68,68,0)} 100%{box-shadow:0 0 0 0 rgba(239,68,68,0)} }
+        @keyframes scBadgePop      { 0%{transform:scale(0.5)} 100%{transform:scale(1)} }
+        @keyframes scChevronBounce { 0%,100%{margin-top:0} 50%{margin-top:4px} }
 
         .sc-alerts-panel {
           overflow:    hidden;
@@ -524,11 +526,11 @@ export default function StatCardsPanel({
           max-height:  0;
           opacity:     0;
           flex-shrink: 0;
-          transition:  width      0.38s cubic-bezier(0.4,0,0.2,1),
-                       max-height 0.38s ease,
-                       opacity    0.30s ease,
-                       margin-left 0.38s ease;
           margin-left: 0;
+          transition:  width 0.38s cubic-bezier(0.4,0,0.2,1),
+                       max-height 0.38s ease,
+                       opacity 0.30s ease,
+                       margin-left 0.38s ease;
         }
         .sc-alerts-panel.open {
           width:       50%;
@@ -538,13 +540,8 @@ export default function StatCardsPanel({
         }
       `}</style>
 
-      {/* ── Chart popup modal ── */}
       {activeModal && activeCardObj && (
-        <CardChartModal
-          card={activeCardObj}
-          data={modalData}
-          onClose={() => setActiveModal(null)}
-        />
+        <CardChartModal card={activeCardObj} data={modalData} onClose={() => setActiveModal(null)} />
       )}
 
       {/* ── Outer row ── */}
@@ -566,18 +563,66 @@ export default function StatCardsPanel({
                 value={getCardValue(c.id)}
                 color={c.colorKey}
                 compact={showAlertsPanel}
-                sub={
-                  c.id === 'workers'        ? selectedDate :
-                  c.id === 'violations'     ? `Peak @ ${maxVHour}` :
-                  c.id === 'compliance'     ? 'Shift avg · All cameras' :
-                  'Without full PPE'
-                }
                 onClick={() => setActiveModal(c.id)}
+                sub={
+                  c.id === 'workers' ? (
+                    <div style={{ display:'flex', flexDirection:'column', gap:3, marginTop:4 }}>
+                      <span>{selectedDate}</span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        Best shift: <span style={{ color:'#22c984', fontWeight:600 }}>
+                          {bestShift === 'morning' ? '🌅 Morning' : bestShift === 'afternoon' ? '☀️ Day' : '🌙 Night'}
+                        </span>
+                      </span>
+                      {trendVsYesterday !== null && (
+                        <span style={{ color: trendVsYesterday >= 0 ? '#22c984' : '#ef4444', fontSize:10 }}>
+                          {trendVsYesterday >= 0 ? '↑' : '↓'} {Math.abs(trendVsYesterday)} vs yesterday
+                        </span>
+                      )}
+                    </div>
+                  ) : c.id === 'violations' ? (
+                    <div style={{ display:'flex', flexDirection:'column', gap:3, marginTop:4 }}>
+                      <span>Peak @ {maxVHour}</span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        ⛑️ No Helmet: <span style={{ color:'#ef4444', fontWeight:600 }}>{Math.round(100-(compliance?.helmet||0))}%</span>
+                        {'  '}🦺 No Vest: <span style={{ color:'#f59e0b', fontWeight:600 }}>{Math.round(100-(compliance?.vest||0))}%</span>
+                      </span>
+                      {violTrend !== null && (
+                        <span style={{ color: violTrend <= 0 ? '#22c984' : '#ef4444', fontSize:10 }}>
+                          {violTrend <= 0 ? '↓' : '↑'} {Math.abs(violTrend)} vs yesterday
+                        </span>
+                      )}
+                    </div>
+                  ) : c.id === 'compliance' ? (
+                    <div style={{ display:'flex', flexDirection:'column', gap:3, marginTop:4 }}>
+                      <span>Shift avg · All cameras</span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        ⛑️ Helmet: <span style={{ color:'#4ade80', fontWeight:600 }}>{compliance?.helmet??0}%</span>
+                        {'  '}🦺 Vest: <span style={{ color:'#4ade80', fontWeight:600 }}>{compliance?.vest??0}%</span>
+                      </span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        Best shift: <span style={{ color:'#f59e0b', fontWeight:600 }}>
+                          {bestShift === 'morning' ? '🌅 Morning' : bestShift === 'afternoon' ? '☀️ Day' : '🌙 Night'}
+                        </span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ display:'flex', flexDirection:'column', gap:3, marginTop:4 }}>
+                      <span>Without full PPE</span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        ⛑️ No Helmet: <span style={{ color:'#ef4444', fontWeight:600 }}>{Math.round(100-(compliance?.helmet||0))}%</span>
+                      </span>
+                      <span style={{ color:'#64748b', fontSize:10 }}>
+                        🦺 No Vest: <span style={{ color:'#f59e0b', fontWeight:600 }}>{Math.round(100-(compliance?.vest||0))}%</span>
+                      </span>
+                    </div>
+                  )
+                }
               />
             ))}
           </div>
         </div>
-        {/* Vertical trigger tab */}
+
+        {/* ── Vertical trigger tab ── */}
         <div
           onClick={onToggleAlerts}
           style={{
@@ -585,47 +630,88 @@ export default function StatCardsPanel({
             flexDirection:  'column',
             alignItems:     'center',
             justifyContent: 'center',
-            gap:            6,
-            width:          22,
+            gap:            10,
+            width:          52,
             alignSelf:      'stretch',
-            background:     panelMounted
-              ? alertCount > 0 ? 'rgba(239,68,68,0.15)' : 'rgba(34,201,132,0.1)'
-              : 'rgba(255,255,255,0.04)',
-            border:         `1px solid ${panelMounted
-              ? alertCount > 0 ? 'rgba(239,68,68,0.4)' : 'rgba(34,201,132,0.3)'
-              : 'rgba(255,255,255,0.1)'}`,
-            borderRadius:   8,
+            minHeight:      140,
+            position:       'relative',
+            background:     tabBg,
+            border:         `1.5px solid ${tabBorder}`,
+            borderRadius:   14,
             cursor:         'pointer',
             flexShrink:     0,
-            marginLeft:     8,
-            transition:     'all 0.2s',
+            marginLeft:     10,
+            padding:        '14px 0',
+            transition:     'background 0.25s ease, border-color 0.25s ease',
+            animation:      (!showAlertsPanel && alertCount > 0) ? 'scPulseRing 2s ease-out infinite' : 'none',
+            boxSizing:      'border-box',
           }}
         >
+          {/* Alert count badge */}
+          {alertCount > 0 && !showAlertsPanel && (
+            <div style={{
+              position:     'absolute',
+              top:          -10,
+              right:        -10,
+              background:   '#ef4444',
+              color:        '#fff',
+              borderRadius: 99,
+              fontSize:     11,
+              fontWeight:   700,
+              minWidth:     22,
+              height:       22,
+              display:      'flex',
+              alignItems:   'center',
+              justifyContent: 'center',
+              border:       '2px solid #0c1220',
+              padding:      '0 4px',
+              animation:    'scBadgePop 0.3s cubic-bezier(0.34,1.56,0.64,1) both',
+              zIndex:       10,
+            }}>
+              {alertCount}
+            </div>
+          )}
+
+          {/* Status dot */}
+          <div style={{
+            width:        8,
+            height:       8,
+            borderRadius: '50%',
+            background:   alertCount > 0 ? '#ef4444' : showAlertsPanel ? '#22c984' : 'rgba(255,255,255,0.2)',
+            animation:    alertCount > 0 ? 'scPulse 1.4s infinite' : 'none',
+            flexShrink:   0,
+          }} />
+
+          {/* Rotated label */}
           <span style={{
-            fontSize:      10,
-            fontWeight:    600,
-            color:         panelMounted
-              ? alertCount > 0 ? '#f87171' : '#4ade80'
-              : '#64748b',
+            fontSize:      11,
+            fontWeight:    700,
+            color:         tabColor,
             writingMode:   'vertical-rl',
             transform:     'rotate(180deg)',
-            letterSpacing: '0.06em',
+            letterSpacing: '0.07em',
             userSelect:    'none',
+            transition:    'color 0.25s',
           }}>
-            {alertCount > 0 ? `🔔 ${alertCount} alerts` : 'Alerts'}
+            {alertCount > 0 ? `🔔 ${alertCount} alert${alertCount > 1 ? 's' : ''}` : 'Alerts'}
           </span>
+
+          {/* Chevron arrow — flips on open, bounces when alerts exist */}
           <span style={{
-            fontSize:   14,
-            color:      panelMounted
-              ? alertCount > 0 ? '#f87171' : '#4ade80'
-              : '#64748b',
-            transition: 'transform 0.2s',
-            transform:  panelMounted ? 'rotate(90deg)' : 'rotate(-90deg)',
-          }}>›</span>
+            fontSize:   26,
+            fontWeight: 700,
+            color:      tabColor,
+            lineHeight: 1,
+            transition: 'transform 0.3s ease, color 0.25s',
+            transform:  showAlertsPanel ? 'rotate(90deg)' : 'rotate(-90deg)',
+            animation:  (!showAlertsPanel && alertCount > 0) ? 'scChevronBounce 1s ease-in-out infinite' : 'none',
+            display:    'flex',
+            alignItems: 'center',
+          }}>‹›</span>
         </div>
 
-        {/* RIGHT — alerts panel */}
-        <div className={`sc-alerts-panel ${panelMounted ? 'open' : ''}`}>
+        {/* RIGHT — alerts slide-out panel — driven by showAlertsPanel directly */}
+        <div className={`sc-alerts-panel ${showAlertsPanel ? 'open' : ''}`}>
           <div style={{
             background:    alertCount > 0 ? '#1a0f0f' : '#0f1a14',
             border:        `1px solid ${alertCount > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,

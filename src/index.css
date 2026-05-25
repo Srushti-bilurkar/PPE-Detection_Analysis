@@ -943,7 +943,6 @@ button { cursor: pointer; }
    Bell icon in topbar + slide-out right-side panel.
    Panel position transitions from right:-340px → right:0.
    ============================================================ */
-
 /* Bell icon button */
 #notif-bell {
   position: relative; cursor: pointer;

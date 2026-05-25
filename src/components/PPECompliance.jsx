@@ -156,6 +156,7 @@ function WorkerViolationTrendChart() {
   const [totals,         setTotals]         = useState({ workers: 0, violations: 0 })
   const [showWorkers,    setShowWorkers]    = useState(true)
   const [showViols,      setShowViols]      = useState(true)
+  const [showSafe,       setShowSafe]       = useState(true)
 
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
@@ -303,9 +304,20 @@ function WorkerViolationTrendChart() {
           showWorkers && {
             label:            'Total Workers',
             data:             workerVals,
-            borderColor:      'rgba(29,200,130,1)',
-            backgroundColor:  'rgba(29,200,130,0.10)',
+            borderColor:      '#3b9eff',
+            backgroundColor:  'rgba(59,158,255,0.08)',
             borderWidth:      2.5,
+            pointRadius:      mode === 'date' ? 4 : 3,
+            pointHoverRadius: 6,
+            tension:          0.4,
+            fill:             true,
+          },
+           showSafe && {
+            label:            'Safe Workers',
+            data:             trendData.map(d => Math.max(0, (d.total_workers ?? 0) - (d.violations ?? 0))),
+            borderColor:      '#22c55e',
+            backgroundColor:  'rgba(34,197,94,0.08)',
+            borderWidth:      2,
             pointRadius:      mode === 'date' ? 4 : 3,
             pointHoverRadius: 6,
             tension:          0.4,
@@ -395,7 +407,7 @@ function WorkerViolationTrendChart() {
       },
     })
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
-  }, [trendData, showWorkers, showViols, mode])
+  }, [trendData, showWorkers, showViols, showSafe, mode])
 
   /* ── year options ── */
   const currentYear = parseInt(today.slice(0, 4))
@@ -532,11 +544,11 @@ function WorkerViolationTrendChart() {
           }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(29,200,130,1)', cursor: 'pointer', userSelect: 'none' }}>
               <input
-                type="checkbox" checked={showWorkers}
-                onChange={e => setShowWorkers(e.target.checked)}
+                type="checkbox" checked={showSafe}
+                onChange={e => setShowSafe(e.target.checked)}
                 style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }}
               />
-              Total Workers
+              Safe Workers
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(229,62,62,0.9)', cursor: 'pointer', userSelect: 'none' }}>
               <input
