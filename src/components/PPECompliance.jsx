@@ -154,6 +154,7 @@ function WorkerViolationTrendChart() {
   const [peakWorkers,    setPeakWorkers]    = useState(null)
   const [peakViolations, setPeakViolations] = useState(null)
   const [totals,         setTotals]         = useState({ workers: 0, violations: 0 })
+  const [showTotal,      setShowTotal]      = useState(true)
   const [showWorkers,    setShowWorkers]    = useState(true)
   const [showViols,      setShowViols]      = useState(true)
 
@@ -296,104 +297,103 @@ function WorkerViolationTrendChart() {
     const violVals   = trendData.map(d => d.violations    ?? 0)
 
     chartRef.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          showWorkers && {
-            label:            'Total Workers',
-            data:             workerVals,
-            borderColor:      'rgba(29,200,130,1)',
-            backgroundColor:  'rgba(29,200,130,0.10)',
-            borderWidth:      2.5,
-            pointRadius:      mode === 'date' ? 4 : 3,
-            pointHoverRadius: 6,
-            tension:          0.4,
-            fill:             true,
-          },
-          showViols && {
-            label:            'Violations',
-            data:             violVals,
-            borderColor:      'rgba(229,62,62,0.9)',
-            backgroundColor:  'rgba(229,62,62,0.07)',
-            borderWidth:      2,
-            borderDash:       [5, 3],
-            pointRadius:      mode === 'date' ? 4 : 3,
-            pointHoverRadius: 6,
-            tension:          0.4,
-            fill:             true,
-          },
-        ].filter(Boolean),
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      showWorkers && {
+        label:            'Safe Workers',
+        data:             workerVals,
+        borderColor:      'rgba(29,200,130,1)',
+        backgroundColor:  'rgba(29,200,130,0.10)',
+        borderWidth:      2.5,
+        pointRadius:      mode === 'date' ? 4 : 3,
+        pointHoverRadius: 6,
+        tension:          0.4,
+        fill:             true,
       },
-      options: {
-        responsive:          true,
-        maintainAspectRatio: false,
-        interaction:         { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: 'rgba(16,24,36,0.92)',
-            titleColor:      '#c8d4e8',
-            bodyColor:       '#8a9ab8',
-            borderColor:     'rgba(255,255,255,0.08)',
-            borderWidth:     1,
-            padding:         10,
-            callbacks: {
-              title: (items) => {
-                if (!items.length) return ''
-                const lbl = items[0].label
-                if (mode === 'date') {
-                  const hour = parseInt(lbl.split(':')[0])
-                  const next = String(hour + 1).padStart(2, '0')
-                  return `${String(hour).padStart(2, '0')}:00 – ${next}:00`
-                }
-                return lbl
-              },
-              label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
-            },
+      showViols && {
+        label:            'Violations',
+        data:             violVals,
+        borderColor:      'rgba(229,62,62,0.9)',
+        backgroundColor:  'rgba(229,62,62,0.07)',
+        borderWidth:      2,
+        borderDash:       [5, 3],
+        pointRadius:      mode === 'date' ? 4 : 3,
+        pointHoverRadius: 6,
+        tension:          0.4,
+        fill:             true,
+      },
+    ].filter(Boolean),
+  },
+  options: {
+    responsive:          true,
+    maintainAspectRatio: false,
+    interaction:         { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(16,24,36,0.92)',
+        titleColor:      '#c8d4e8',
+        bodyColor:       '#8a9ab8',
+        borderColor:     'rgba(255,255,255,0.08)',
+        borderWidth:     1,
+        padding:         10,
+        callbacks: {
+          title: (items) => {
+            if (!items.length) return ''
+            const lbl = items[0].label
+            if (mode === 'date') {
+              const hour = parseInt(lbl.split(':')[0])
+              const next = String(hour + 1).padStart(2, '0')
+              return `${String(hour).padStart(2, '0')}:00 – ${next}:00`
+            }
+            return lbl
           },
-        },
-        scales: {
-          x: {
-            ticks: {
-              color:         '#666f82',
-              font:          { size: 10 },
-              maxTicksLimit: mode === 'date' ? 24 : 12,
-              autoSkip:      true,
-              callback: function(_, index) {
-                const lbl = labels[index]
-                if (!lbl) return null
-                // For date mode show just the hour number (e.g. "07" → "7")
-                if (mode === 'date') return parseInt(lbl.split(':')[0])
-                return lbl
-              },
-            },
-            grid:  { color: 'rgba(255,255,255,0.04)' },
-            title: {
-              display: true,
-              text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
-              color:   '#5a6a82',
-              font:    { size: 10 },
-            },
-          },
-          y: {
-            beginAtZero: true,
-            ticks: {
-              color: '#666f82',
-              font:  { size: 10 },
-              callback: (val) => Number.isInteger(val) ? val : null,
-            },
-            grid:  { color: 'rgba(255,255,255,0.04)' },
-            title: {
-              display: true,
-              text:    mode === 'date' ? 'count (per hour)' : 'count',
-              color:   '#4a5a72',
-              font:    { size: 10 },
-            },
-          },
+          label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
         },
       },
-    })
+    },
+    scales: {
+      x: {
+        ticks: {
+          color:         '#666f82',
+          font:          { size: 10 },
+          maxTicksLimit: mode === 'date' ? 24 : 12,
+          autoSkip:      true,
+          callback: function(_, index) {
+            const lbl = labels[index]
+            if (!lbl) return null
+            if (mode === 'date') return parseInt(lbl.split(':')[0])
+            return lbl
+          },
+        },
+        grid:  { color: 'rgba(255,255,255,0.04)' },
+        title: {
+          display: true,
+          text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
+          color:   '#5a6a82',
+          font:    { size: 10 },
+        },
+      },
+      y: {
+        beginAtZero: true,
+        ticks: {
+          color: '#666f82',
+          font:  { size: 10 },
+          callback: (val) => Number.isInteger(val) ? val : null,
+        },
+        grid:  { color: 'rgba(255,255,255,0.04)' },
+        title: {
+          display: true,
+          text:    mode === 'date' ? 'count (per hour)' : 'count',
+          color:   '#4a5a72',
+          font:    { size: 10 },
+        },
+      },
+    },
+  },
+})
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
   }, [trendData, showWorkers, showViols, mode])
 
@@ -415,7 +415,7 @@ function WorkerViolationTrendChart() {
     <div className="panel" style={{ marginTop: 16 }}>
       {/* ── header ── */}
       <div className="panel-header">
-        <div className="panel-title">📈 Total Workers vs Violations — Trend</div>
+        <div className="panel-title">📈 Safe Workers vs Violations — Trend</div>
         <div className="panel-subtitle">{subtitle}</div>
       </div>
 
@@ -536,7 +536,7 @@ function WorkerViolationTrendChart() {
                 onChange={e => setShowWorkers(e.target.checked)}
                 style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }}
               />
-              Total Workers
+              Safe Workers
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(229,62,62,0.9)', cursor: 'pointer', userSelect: 'none' }}>
               <input
@@ -594,10 +594,11 @@ function WorkerViolationTrendChart() {
               <span style={{ opacity: 0.6 }}> @ {peakViolations?.l}</span>
             </span>
             <span style={{ opacity: 0.4 }}>|</span>
-            <span style={{ opacity: 0.6 }}>Total Workers: <strong>{totals.workers}</strong></span>
+            <span style={{ opacity: 0.6 }}>Safe Workers: <strong>{totals.workers}</strong></span>
             <span style={{ opacity: 0.4 }}>|</span>
             <span style={{ opacity: 0.6 }}>Total Violations: <strong>{totals.violations}</strong></span>
           </div>
+          
         )}
 
         {/* ── chart canvas ── */}
