@@ -435,7 +435,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             </div>
           )}
         </div>
-        <span className="date-bar-hint">← change date to update all stats</span>
+        <span className="date-bar-hint"></span>
       </div>
 
       {/* 3. STAT CARDS PANEL */}
