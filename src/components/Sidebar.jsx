@@ -28,7 +28,15 @@ export default function Sidebar({ activeTab, setActiveTab, alerts }) {
   const [lastSeenCount, setLastSeenCount] = useState(0)
   const [viewedTabs,    setViewedTabs]    = useState(new Set(['safety-dashboard']))
 
-  const unackCount = alerts.filter(a => !a.acknowledged).length
+  const today = new Date().toISOString().slice(0, 10)
+
+  const unackCount = alerts.filter(a => {
+    if (!a._id || !a.timestamp) return false
+    if (a.acknowledged) return false
+    const ts = new Date(a.timestamp)
+    if (isNaN(ts.getTime())) return false
+    return ts.toISOString().slice(0, 10) === today
+  }).length
 
   // New alerts since last time user visited alerts/dashboard tab
   const newCount = Math.max(0, unackCount - lastSeenCount)

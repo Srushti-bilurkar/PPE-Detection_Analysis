@@ -68,7 +68,7 @@ BADGE_THICKNESS   = 1
  
 BADGE_CONF_H      = 18
  
-COLLAGE_SAVE_DIR = r"c:\Users\varshas\Desktop\yolo-frontend\collages_output"
+COLLAGE_SAVE_DIR = r"C:\Users\srustib\Desktop\yolo-frontend\collages_output"
  
 # ── YOLO Model Selection ───────────────────────────────────────────────────────
  
@@ -714,5 +714,4 @@ def main():
 if __name__ == "__main__":
  
     main()
- 
  

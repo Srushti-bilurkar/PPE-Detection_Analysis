@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useUser } from './UserContext'
 
 const TAB_TITLES = {
   'safety-dashboard': ['Safety Dashboard',        'Tower A & B · Live AI Monitoring'],
@@ -70,8 +71,8 @@ function parseTimestamp(ts) {
   }
   const d = new Date(ts)
   if (!isNaN(d.getTime())) return d
-  const cleaned = ts.replace(' IST', '').replace(' ', 'T')   
-  const d2 = new Date(cleaned)   
+  const cleaned = ts.replace(' IST', '').replace(' ', 'T')
+  const d2 = new Date(cleaned)
   return isNaN(d2.getTime()) ? null : d2
 }
 
@@ -93,7 +94,6 @@ function formatHandoverDateStr(handoverDate) {
     .toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', weekday: 'long' })
 }
 
-// ── Fetch hourly trend for one date, return { safe, violated } ────────────
 async function fetchDayTrend(date, shift = 'both') {
   try {
     const params = new URLSearchParams({ date, shift })
@@ -108,7 +108,6 @@ async function fetchDayTrend(date, shift = 'both') {
   }
 }
 
-// ── Build KPI object from summed totals (mirrors SafetyDashboard logic) ───
 function buildKpiFromTotals(safe, violated, alertsArr) {
   const total      = safe + violated
   const compliance = total > 0 ? Math.round((safe / total) * 100) : 100
@@ -124,7 +123,6 @@ function buildKpiFromTotals(safe, violated, alertsArr) {
   }
 }
 
-// ── Build the full handover HTML ──────────────────────────────────────────
 function buildHandoverHTML({ alerts, kpi, activeTab, handoverDate, siteName }) {
   const now = new Date()
   const generatedDateStr = now.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
@@ -241,14 +239,13 @@ function buildHandoverHTML({ alerts, kpi, activeTab, handoverDate, siteName }) {
     * { margin:0; padding:0; box-sizing:border-box; }
     body { font-family:'Segoe UI',system-ui,sans-serif; background:#0f172a; color:#e2e8f0; font-size:13px; line-height:1.5; }
     table { border-collapse:collapse; width:100%; }
-    @media print {       
-      body { background:#fff !important; color:#0f172a !important; }       
-      .no-print { display:none !important; }       
-      div[style*="max-height"] { max-height:none !important; overflow:visible !important; }       
-      table { table-layout:fixed; width:100% !important; }       
-      td, th { word-break:break-word; overflow-wrap:break-word; }     
+    @media print {
+      body { background:#fff !important; color:#0f172a !important; }
+      .no-print { display:none !important; }
+      div[style*="max-height"] { max-height:none !important; overflow:visible !important; }
+      table { table-layout:fixed; width:100% !important; }
+      td, th { word-break:break-word; overflow-wrap:break-word; }
     }
- 
   </style>
 </head>
 <body>
@@ -299,13 +296,12 @@ function buildHandoverHTML({ alerts, kpi, activeTab, handoverDate, siteName }) {
         🛡️ Safety Summary
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
-        <div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:10px;padding:18px;">  
-          <div style="font-size:11px;color:#a5b4fc;font-weight:700;text-transform:uppercase;  
-            letter-spacing:1px;margin-bottom:8px;">💬 Commented Violations</div>  
-          <div style="font-size:36px;font-weight:700;color:#818cf8;">${withComments}</div>  
+        <div style="background:#1e1b4b;border:1px solid #4f46e5;border-radius:10px;padding:18px;">
+          <div style="font-size:11px;color:#a5b4fc;font-weight:700;text-transform:uppercase;
+            letter-spacing:1px;margin-bottom:8px;">💬 Commented Violations</div>
+          <div style="font-size:36px;font-weight:700;color:#818cf8;">${withComments}</div>
           <div style="font-size:11px;color:#a5b4fc;margin-top:4px;">violations with supervisor comments attached</div>
         </div>
- 
         <div style="background:#450a0a;border:1px solid #dc2626;border-radius:10px;padding:18px;">
           <div style="font-size:11px;color:#fca5a5;font-weight:700;text-transform:uppercase;
             letter-spacing:1px;margin-bottom:8px;">🚨 Alerts Summary</div>
@@ -488,6 +484,11 @@ export default function Topbar({
   zones    = [],
   siteName = 'Construction Site',
 }) {
+  // ✅ FIX: useUser() moved inside the component body (was incorrectly at module level)
+  const userCtx    = useUser()
+  const currentUser = userCtx?.currentUser
+  const isAdmin     = userCtx?.isAdmin
+
   const [notifOpen,            setNotifOpen]            = useState(false)
   const [lightMode,            setLightMode]            = useState(false)
   const [readIds,              setReadIds]              = useState(new Set())
@@ -819,6 +820,20 @@ export default function Topbar({
         <button id="summary-btn" className={`topbar-btn${summaryOpen?' active':''}`} onClick={handleSummaryClick} title="Date-wise site summary">
           📊 Summary
         </button>
+
+        {currentUser && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '3px 10px', borderRadius: 10,
+            background: isAdmin ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)',
+            border: `1px solid ${isAdmin ? 'rgba(59,130,246,0.25)' : 'rgba(100,116,139,0.25)'}`,
+            fontSize: 11, fontFamily: 'monospace', fontWeight: 700,
+            color: isAdmin ? '#93c5fd' : '#94a3b8',
+            whiteSpace: 'nowrap',
+          }}>
+            {currentUser.name} · {isAdmin ? 'ADMIN' : 'USER'}
+          </div>
+        )}
       </div>
 
       {/* Screen tabs */}

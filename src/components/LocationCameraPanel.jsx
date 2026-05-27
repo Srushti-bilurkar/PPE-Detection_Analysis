@@ -166,12 +166,12 @@ function Breadcrumb({ locationLabel, subLabel, camName, onHome, onClickLoc, onCl
 
 /* ── Location button ── */
 function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, onSelect, onSelectSub, onTogglePopover }) {
-  const isActive = loc.id === activeId
+  const isActive      = loc.id === activeId
   const isPopoverOpen = popoverOpenId === loc.id
-  const hasSubLocs = !!loc.subLocations
-  const btnRef = useRef(null)
+  const hasSubLocs    = !!loc.subLocations
+  const btnRef        = useRef(null)
 
-  const allCams = hasSubLocs
+  const allCams   = hasSubLocs
     ? loc.subLocations.flatMap(s => resolveCams(s.cameras, cameras))
     : resolveCams(loc.cameras || [], cameras)
   const liveCount = allCams.filter(c => c.ready).length
@@ -179,8 +179,14 @@ function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, on
   function handleClick(e) {
     e.stopPropagation()
     if (hasSubLocs) {
-      onSelect(loc.id)
-      onTogglePopover(isPopoverOpen ? null : loc.id)
+      const newId = isActive ? null : loc.id
+      onSelect(newId)
+      // Only open popover when selecting, close when deselecting
+      if (!isActive) {
+        onTogglePopover(isPopoverOpen ? null : loc.id)
+      } else {
+        onTogglePopover(null)
+      }
     } else {
       onSelect(isActive ? null : loc.id)
     }
@@ -213,7 +219,7 @@ function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, on
                 className={`loc-popover-item ${sub.id === activeSubId ? 'selected' : ''}`}
                 onClick={e => {
                   e.stopPropagation()
-                  onSelectSub(sub.id)
+                  onSelectSub(sub.id, loc.id)  // ← pass loc.id too
                   onTogglePopover(null)
                 }}
               >
@@ -264,18 +270,6 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
 
   return (
     <div>
-      {/* Role banner */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 11, color: '#64748b' }}>
-        <span style={{
-          padding: '2px 8px', borderRadius: 10, fontFamily: 'monospace', fontWeight: 700, fontSize: 10,
-          background: isAdmin ? 'rgba(59,130,246,0.15)' : 'rgba(100,116,139,0.15)',
-          color: isAdmin ? '#93c5fd' : '#94a3b8',
-          border: `1px solid ${isAdmin ? 'rgba(59,130,246,0.3)' : 'rgba(100,116,139,0.3)'}`,
-        }}>
-          {currentUser.name} · {isAdmin ? 'ADMIN' : 'USER'}
-        </span>
-        <span>{isAdmin ? 'Showing all 4 locations' : 'Showing 2 of 4 locations'}</span>
-      </div>
 
       {/* Breadcrumb */}
       <Breadcrumb
@@ -287,11 +281,10 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
           setActiveSubId(null)
           setSelectedCam(null)
           setPopoverOpenId(null)
-          onCamSelect?.(null)   // ← clear filter on home
+          onCamSelect?.(null)
         }}
         onClickLoc={() => {
           setSelectedCam(null)
-          // restore location-level filter (all cams of this location)
           if (activeLoc && !activeLoc.subLocations) {
             const locCams = resolveCams(activeLoc.cameras || [], cameras)
             onCamSelect?.({ id: locCams.map(c => c.id).join(','), name: activeLoc.label, _isLocation: true })
@@ -301,7 +294,6 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
         }}
         onClickSub={() => {
           setSelectedCam(null)
-          // restore sublocation-level filter
           if (activeSub) {
             const subCams = resolveCams(activeSub.cameras, cameras)
             onCamSelect?.({ id: subCams.map(c => c.id).join(','), name: activeSub.label, _isLocation: true })
@@ -326,14 +318,11 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
                 setActiveSubId(null)
                 setSelectedCam(null)
                 if (!id) {
-                  // deselected — clear everything
                   setPopoverOpenId(null)
                   onCamSelect?.(null)
                 } else {
-                  // location selected — pass its cameras up as filter
                   const selected = visibleLocations.find(l => l.id === id)
                   if (selected && !selected.subLocations) {
-                    // flat location — send all its cameras
                     const locCams = resolveCams(selected.cameras || [], cameras)
                     onCamSelect?.({
                       id:          locCams.map(c => c.id).join(','),
@@ -341,7 +330,6 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
                       _isLocation: true,
                     })
                   } else if (selected && selected.subLocations) {
-                    // has sub-locations — send ALL cameras across all subs
                     const allSubCams = selected.subLocations.flatMap(s => resolveCams(s.cameras, cameras))
                     onCamSelect?.({
                       id:          allSubCams.map(c => c.id).join(','),
@@ -351,12 +339,12 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
                   }
                 }
               }}
-              onSelectSub={id => {
-                setActiveSubId(id)
+              onSelectSub={(subId, parentLocId) => {   // ← NOW receives parentLocId too
+                setActiveSubId(subId)
+                setActiveId(parentLocId)               // ← FIX: ensure activeId is set
                 setSelectedCam(null)
-                // sublocation selected — pass its cameras up as filter
-                const loc = visibleLocations.find(l => l.id === activeId)
-                const sub = loc?.subLocations?.find(s => s.id === id)
+                const parentLoc = visibleLocations.find(l => l.id === parentLocId)  // ← use parentLocId
+                const sub       = parentLoc?.subLocations?.find(s => s.id === subId)
                 if (sub) {
                   const subCams = resolveCams(sub.cameras, cameras)
                   onCamSelect?.({
@@ -378,7 +366,6 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
           cameras={visibleCams}
           onCamSelect={(cam) => {
             setSelectedCam(cam)
-            // individual camera clicked — pass single cam up as filter
             onCamSelect?.(cam)
           }}
         />

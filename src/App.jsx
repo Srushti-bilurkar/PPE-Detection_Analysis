@@ -18,8 +18,15 @@ import { UserProvider } from './components/UserContext'
 
 export default function App() {
   const [activeTab,  setActiveTab]  = useState('safety-dashboard')
-  const [globalDate, setGlobalDate] = useState(new Date().toISOString().split('T')[0])
-  const { alerts, kpi } = useSSE()
+  const [globalDate, setGlobalDate] = useState(
+    localStorage.getItem('yolo_selected_date') || new Date().toISOString().split('T')[0]
+  )
+  const { alerts, kpi } = useSSE(globalDate)  // ← add globalDate
+
+  const handleDateChange = (date) => {
+    localStorage.setItem('yolo_selected_date', date)
+    setGlobalDate(date)
+  }
 
   return (
     <UserProvider>
@@ -28,10 +35,10 @@ export default function App() {
         <div className="main">
           <Topbar activeTab={activeTab} setActiveTab={setActiveTab} alerts={alerts} kpi={kpi} />
           <div className="content-area">
-            {activeTab === 'safety-dashboard' && <SafetyDashboard alerts={alerts} kpi={kpi} selectedDate={globalDate} onDateChange={setGlobalDate} />}
+            {activeTab === 'safety-dashboard' && <SafetyDashboard alerts={alerts} kpi={kpi} selectedDate={globalDate} onDateChange={handleDateChange} />}
             {activeTab === 'zone-map'         && <ZoneMap />}
-            {activeTab === 'ppe-compliance'   && <PPECompliance selectedDate={globalDate} onDateChange={setGlobalDate} />}
-            {activeTab === 'alerts'           && <AlertFeedPage alerts={alerts} selectedDate={globalDate} onDateChange={setGlobalDate} />}
+            {activeTab === 'ppe-compliance'   && <PPECompliance selectedDate={globalDate} onDateChange={handleDateChange} />}
+            {activeTab === 'alerts'           && <AlertFeedPage alerts={alerts} selectedDate={globalDate} onDateChange={handleDateChange} />}
             {activeTab === 'productivity'     && <Productivity />}
             {activeTab === 'scorecard'        && <Scorecard />}
             {activeTab === 'progress'         && <Progress />}

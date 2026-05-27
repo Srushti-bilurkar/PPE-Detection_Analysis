@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Chart, registerables } from 'chart.js'
 Chart.register(...registerables)
 
@@ -25,15 +25,16 @@ function Sparkline({ data = [], color = '#22c984', height = 40 }) {
 }
 
 // ─── Bar row ──────────────────────────────────────────────────────────────────
-function BarRow({ label, value, max, color, suffix = '' }) {
+function BarRow({ label, value, max, color, suffix = '', theme = 'dark' }) {
   const pct = Math.round((value / Math.max(max, 1)) * 100)
+  const isDark = theme === 'dark'
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-        <span style={{ color: '#cbd5e1' }}>{label}</span>
+        <span style={{ color: isDark ? '#cbd5e1' : '#475569' }}>{label}</span>
         <span style={{ color, fontWeight: 700, fontFamily: 'monospace' }}>{value}{suffix}</span>
       </div>
-      <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 3, height: 5 }}>
+      <div style={{ background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)', borderRadius: 3, height: 5 }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.5s ease' }} />
       </div>
     </div>
@@ -51,11 +52,28 @@ function aggregateKpis(kpiList) {
   return { total_safe, total_violations, total_persons, compliance_pct }
 }
 
+// ─── Collect all cameras (including sub-locations) for a location ─────────────
 function getAllCamerasForLocation(location) {
   if (!location) return []
   if (location.cameras) return location.cameras
   if (location.subLocations) return location.subLocations.flatMap(sub => sub.cameras || [])
   return []
+}
+
+// ─── Get unique db_ids for a location (deduped) ───────────────────────────────
+function getUniqueDbIdsForLocation(location) {
+  if (!location) return []
+  const cameras = getAllCamerasForLocation(location)
+  const seen = new Set()
+  const unique = []
+  for (const cam of cameras) {
+    const dbId = cam.db_id || cam.id
+    if (dbId && !seen.has(dbId)) {
+      seen.add(dbId)
+      unique.push(dbId)
+    }
+  }
+  return unique
 }
 
 // ─── Chart Modal ──────────────────────────────────────────────────────────────
@@ -266,7 +284,7 @@ function CardChartModal({ card, data, onClose }) {
 }
 
 // ─── Detail panel content per card ───────────────────────────────────────────
-function DetailContent({ cardId, data }) {
+function DetailContent({ cardId, data, theme = 'dark' }) { 
   const {
     todaySafe, todayViols, displayViolated, maxViolations, maxVHour, compliance,
     displaySafe, displayCompliance, cameraSafe, trendData, derivedSafe,
@@ -277,12 +295,19 @@ function DetailContent({ cardId, data }) {
   const scopeLabel       = selectedLocation?.label || selectedCamera?.id || null
   const workersSafeValue = resolvedKpi ? (resolvedKpi.total_safe ?? '—') : (derivedSafe ?? todaySafe)
   const violsValue       = resolvedKpi ? (resolvedKpi.total_violations ?? '—') : todayViols
+  const isDark = theme === 'dark'
+  const T = {
+    text:    isDark ? '#e2e8f0' : '#0f172a',
+    muted:   isDark ? '#94a3b8' : '#64748b',
+    subtext: isDark ? '#cbd5e1' : '#334155',
+    rowBg:   isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)',
+  }
 
   if (cardId === 'workers') {
     return (
       <div>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: T.muted, marginBottom: 4 }}>
             {scopeLabel ? `WORKERS SAFE · ${scopeLabel}` : 'WORKERS SAFE ON-SITE'}
           </div>
           <div style={{ fontSize: 52, fontWeight: 700, color: '#22c984', lineHeight: 1 }}>{workersSafeValue}</div>
@@ -292,18 +317,20 @@ function DetailContent({ cardId, data }) {
           </div>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>HOURLY TREND</div>
+          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 8 }}>HOURLY TREND</div>
           <Sparkline data={(trendData || []).map(d => d.workers_active)} color="#22c984" height={50} />
           {(!trendData || trendData.length === 0) && (
-            <div style={{ fontSize: 11, color: '#64748b', textAlign: 'center', marginTop: 8 }}>No hourly data available</div>
+            <div style={{ fontSize: 11, color: T.muted, textAlign: 'center', marginTop: 8 }}>No hourly data available</div>
           )}
         </div>
         {selectedLocation && locationCameraKpis && (
           <div>
-            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>CAMERA BREAKDOWN · {selectedLocation.label}</div>
+            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 8 }}>
+              CAMERA BREAKDOWN · {selectedLocation.label}
+            </div>
             {locationCameraKpis.map(({ camera, kpi }) => (
-              <div key={camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 5 }}>
-                <span style={{ color: '#cbd5e1' }}>📷 {camera.id}</span>
+              <div key={camera.db_id || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
+                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.id}</span>
                 <span style={{ color: '#22c984', fontWeight: 700 }}>{kpi ? kpi.total_safe : '—'} safe</span>
               </div>
             ))}
@@ -311,10 +338,10 @@ function DetailContent({ cardId, data }) {
         )}
         {!selectedLocation && (
           <div>
-            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>{scopeLabel ? 'CAMERA DETAIL' : 'ZONE / CAMERA'}</div>
+            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 8 }}>{scopeLabel ? 'CAMERA DETAIL' : 'ZONE / CAMERA'}</div>
             {(cameraSafe || []).filter(c => !scopeLabel || c.camera_id === scopeLabel).map(c => (
-              <div key={c.camera_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 5 }}>
-                <span style={{ color: '#cbd5e1' }}>📷 {c.camera_id}</span>
+              <div key={c.camera_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
+                <span style={{ color: T.subtext }}>📷 {c.camera_id}</span>
                 <span style={{ color: '#22c984', fontWeight: 700 }}>{c.safe_count} safe</span>
               </div>
             ))}
@@ -328,26 +355,28 @@ function DetailContent({ cardId, data }) {
     return (
       <div>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>{scopeLabel ? `MAX VIOLATIONS · ${scopeLabel}` : 'MAX VIOLATIONS'}</div>
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: T.muted, marginBottom: 4 }}>{scopeLabel ? `MAX VIOLATIONS · ${scopeLabel}` : 'MAX VIOLATIONS'}</div>
           <div style={{ fontSize: 52, fontWeight: 700, color: '#ef4444', lineHeight: 1 }}>{maxViolations}</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>Peak @ {maxVHour}</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>Peak @ {maxVHour}</div>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>HOURLY VIOLATIONS</div>
+          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 8 }}>HOURLY VIOLATIONS</div>
           <Sparkline data={(trendData || []).map(d => d.violations)} color="#ef4444" height={50} />
         </div>
         {selectedLocation && locationCameraKpis && (
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 8 }}>CAMERA BREAKDOWN · {selectedLocation.label}</div>
+            <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 8 }}>
+              CAMERA BREAKDOWN · {selectedLocation.label}
+            </div>
             {locationCameraKpis.map(({ camera, kpi }) => (
-              <div key={camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 5 }}>
-                <span style={{ color: '#cbd5e1' }}>📷 {camera.id}</span>
+              <div key={camera.db_id || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
+                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.id}</span>
                 <span style={{ color: '#ef4444', fontWeight: 700 }}>{kpi ? kpi.total_violations : '—'} violations</span>
               </div>
             ))}
           </div>
         )}
-        <div style={{ padding: '10px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
+        <div style={{ padding: '10px 12px', background: isDark ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.08)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
             <span style={{ color: '#22c984' }}>✓ Safe: <strong>{displaySafe}</strong></span>
             <span style={{ color: '#ef4444' }}>✗ Violated: <strong>{displayViolated}</strong></span>
@@ -361,21 +390,21 @@ function DetailContent({ cardId, data }) {
     return (
       <div>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>{scopeLabel ? `PPE COMPLIANCE · ${scopeLabel}` : 'PPE COMPLIANCE'}</div>
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: T.muted, marginBottom: 4 }}>{scopeLabel ? `PPE COMPLIANCE · ${scopeLabel}` : 'PPE COMPLIANCE'}</div>
           <div style={{ fontSize: 52, fontWeight: 700, color: '#f59e0b', lineHeight: 1 }}>
             {resolvedKpi?.compliance_pct != null ? `${resolvedKpi.compliance_pct}%` : displayCompliance !== null ? `${displayCompliance}%` : '—'}
           </div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>{scopeLabel ? `${scopeLabel} · today` : 'Shift avg · All cameras'}</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>{scopeLabel ? `${scopeLabel} · today` : 'Shift avg · All cameras'}</div>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>PPE ITEM COMPLIANCE</div>
-          <BarRow label="Helmet" value={compliance?.helmet ?? 0} max={100} color="#4ade80" suffix="%" />
-          <BarRow label="Vest"   value={compliance?.vest   ?? 0} max={100} color="#4ade80" suffix="%" />
+          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 10 }}>PPE ITEM COMPLIANCE</div>
+          <BarRow label="Helmet" value={compliance?.helmet ?? 0} max={100} color="#4ade80" suffix="%" theme={theme} />
+          <BarRow label="Vest"   value={compliance?.vest   ?? 0} max={100} color="#4ade80" suffix="%" theme={theme} />
         </div>
         <div>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>VIOLATION BREAKDOWN</div>
-          <BarRow label="No Helmet" value={Math.round(100 - (compliance?.helmet || 0))} max={100} color="#ef4444" suffix="%" />
-          <BarRow label="No Vest"   value={Math.round(100 - (compliance?.vest   || 0))} max={100} color="#f59e0b" suffix="%" />
+          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 10 }}>VIOLATION BREAKDOWN</div>
+          <BarRow label="No Helmet" value={Math.round(100 - (compliance?.helmet || 0))} max={100} color="#ef4444" suffix="%" theme={theme} />
+          <BarRow label="No Vest"   value={Math.round(100 - (compliance?.vest   || 0))} max={100} color="#f59e0b" suffix="%" theme={theme} />
         </div>
       </div>
     )
@@ -388,17 +417,17 @@ function DetailContent({ cardId, data }) {
     return (
       <div>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 4 }}>{scopeLabel ? `PPE VIOLATIONS · ${scopeLabel}` : 'PPE VIOLATIONS'}</div>
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', color: T.muted, marginBottom: 4 }}>{scopeLabel ? `PPE VIOLATIONS · ${scopeLabel}` : 'PPE VIOLATIONS'}</div>
           <div style={{ fontSize: 52, fontWeight: 700, color: '#ef4444', lineHeight: 1 }}>{compPct !== null ? `${100 - compPct}%` : '—'}</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>Workers without full PPE</div>
+          <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>Workers without full PPE</div>
         </div>
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', marginBottom: 10 }}>VIOLATION TYPE</div>
-          <BarRow label="No Helmet" value={noHelmet} max={100} color="#ef4444" suffix="%" />
-          <BarRow label="No Vest"   value={noVest}   max={100} color="#f59e0b" suffix="%" />
+          <div style={{ fontSize: 9, letterSpacing: '0.08em', color: T.muted, marginBottom: 10 }}>VIOLATION TYPE</div>
+          <BarRow label="No Helmet" value={noHelmet} max={100} color="#ef4444" suffix="%" theme={theme} />
+          <BarRow label="No Vest"   value={noVest}   max={100} color="#f59e0b" suffix="%" theme={theme} />
         </div>
-        <div style={{ padding: '10px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>SEVERITY</div>
+        <div style={{ padding: '10px 12px', background: isDark ? 'rgba(239,68,68,0.06)' : 'rgba(239,68,68,0.08)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>SEVERITY</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
             <span style={{ color: '#ef4444' }}>Critical: <strong>{noHelmet}%</strong></span>
             <span style={{ color: '#f59e0b' }}>Warning: <strong>{noVest}%</strong></span>
@@ -415,7 +444,7 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
   const hasAlerts  = visibleAlerts.length > 0
   const now        = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const scopeLabel = selectedLocation?.label || selectedCamera?.id || null
-
+ 
   const HOURS = (trendData || []).map(d => {
     const [hStr] = (d.hour?.slice(0, 5) ?? '').split(':')
     const h = parseInt(hStr, 10)
@@ -433,7 +462,7 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
     if (r < 0.75) return 'rgba(239,68,68,0.65)'
     return '#ef4444'
   }
-
+ 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexShrink: 0 }}>
@@ -506,45 +535,294 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
   )
 }
 
+
 // ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, label, value, color, sub, onClick, isActive, compact }) {
+function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, isActive, compact,
+  // scoped (location/camera-aware) values — already resolved by parent
+  scopedSafe, scopedRisk, scopedTotal,
+  scopedCompliance, scopedHelmet, scopedVest, scopedBothPpe,
+  scopedViolations, scopedPeakTime, scopedTopCamera,
+  // Card 4 trend values
+  safetyImprovementPct, helmetDelta, vestDelta,
+  // Card 1 extras
+  activeCameras, currentShift,
+  // Card 3 extras
+  topViolationType,
+  // Card 1 live streaming
+  isStreaming, onLiveRefresh, liveRefreshing, liveLastUpdated,
+  // NEW: auto-refresh countdown for card 1
+  autoRefreshCountdown,
+  // Theme
+  theme = 'dark',
+}) {
   const [hover, setHover] = useState(false)
+  const isDark = theme === 'dark'
+
+  // ── FIXED: Proper light/dark theme tokens ─────────────────────────────────
+  const T = {
+    cardBg:       isDark ? '#0d1828'                      : '#ffffff',
+    cardBgHover:  isDark ? '#131d2e'                      : '#f8fafc',
+    cardBgActive: isDark ? '#0f1f30'                      : '#f0f9ff',
+    border:       isDark ? 'rgba(255,255,255,0.06)'       : 'rgba(0,0,0,0.10)',
+    borderHover:  isDark ? 'rgba(255,255,255,0.13)'       : 'rgba(0,0,0,0.20)',
+    // ── text tokens — dark bg needs light text; light bg needs dark text ──
+    text:         isDark ? '#e2e8f0'                      : '#0f172a',
+    muted:        isDark ? '#94a3b8'                      : '#475569',
+    subtext:      isDark ? '#cbd5e1'                      : '#334155',
+    rowDivider:   isDark ? 'rgba(255,255,255,0.05)'       : 'rgba(0,0,0,0.07)',
+    liveBg:       isDark ? 'rgba(34,201,132,0.08)'        : 'rgba(34,201,132,0.10)',
+    liveBorder:   isDark ? 'rgba(34,201,132,0.2)'         : 'rgba(34,201,132,0.35)',
+    hint:         isDark ? '#475569'                      : '#94a3b8',
+    labelBg:      isDark ? `${color}22`                   : `${color}18`,
+    labelBorder:  isDark ? `${color}44`                   : `${color}55`,
+    // Row label text — must be readable on both bg colors
+    rowLabel:     isDark ? '#94a3b8'                      : '#374151',
+    // Auto-refresh bar bg
+    refreshBarBg: isDark ? 'rgba(255,255,255,0.04)'       : 'rgba(0,0,0,0.06)',
+    refreshFill:  '#22c984',
+  }
+
+  // ── Per-card inline row data ───────────────────────────────────────────────
+  const renderRows = () => {
+    const rowStyle = {
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '5px 0', borderBottom: `1px solid ${T.rowDivider}`,
+      fontSize: compact ? 10 : 11,
+    }
+    const lbl = { color: T.rowLabel, fontWeight: 500 }
+    const val = (c = color) => ({ color: c, fontWeight: 700, fontFamily: 'monospace', fontSize: compact ? 11 : 12 })
+
+    // ── CARD 1: LIVE STATUS ───────────────────────────────────────────────────
+    if (cardId === 'workers') {
+      const safe    = scopedSafe  ?? '—'
+      const risk    = scopedRisk  ?? '—'
+      const total   = scopedTotal ?? '—'
+      const cams    = activeCameras ?? '—'
+      const shift   = currentShift  ?? '—'
+      const safeLabel = total !== '—' ? `${safe} / ${total}` : `${safe}`
+      return (
+        <>
+          {/* ── FIXED: Live streaming indicator with auto-refresh countdown ── */}
+          {isStreaming && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 8, padding: '5px 8px',
+              background: T.liveBg, border: `1px solid ${T.liveBorder}`,
+              borderRadius: 6,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%', background: '#22c984',
+                  display: 'inline-block', flexShrink: 0,
+                  animation: 'pulse 1.4s ease-in-out infinite',
+                }} />
+                <span style={{ fontSize: 9, color: '#22c984', fontWeight: 700, letterSpacing: '0.08em' }}>
+                  LIVE
+                </span>
+                {liveLastUpdated && (
+                  <span style={{ fontSize: 9, color: T.muted, marginLeft: 4 }}>
+                    {liveLastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                )}
+                {/* Auto-refresh countdown badge */}
+                {autoRefreshCountdown != null && (
+                  <span style={{
+                    fontSize: 9, color: '#22c984', marginLeft: 6,
+                    background: 'rgba(34,201,132,0.12)', border: '1px solid rgba(34,201,132,0.25)',
+                    borderRadius: 4, padding: '1px 5px', fontWeight: 700, fontFamily: 'monospace',
+                  }}>
+                    {autoRefreshCountdown}s
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); onLiveRefresh?.() }}
+                disabled={liveRefreshing}
+                title="Refresh live data"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  background: liveRefreshing ? 'rgba(34,201,132,0.05)' : 'rgba(34,201,132,0.12)',
+                  border: '1px solid rgba(34,201,132,0.3)',
+                  borderRadius: 5, color: '#22c984', cursor: liveRefreshing ? 'not-allowed' : 'pointer',
+                  padding: '3px 8px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em',
+                  transition: 'background 0.15s', opacity: liveRefreshing ? 0.6 : 1,
+                }}
+              >
+                <svg
+                  width="10" height="10" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                  style={{ animation: liveRefreshing ? 'spin 0.8s linear infinite' : 'none' }}
+                >
+                  <path d="M23 4v6h-6" /><path d="M1 20v-6h6" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                {liveRefreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+          )}
+
+          {/* ── FIXED: Auto-refresh progress bar (10s cycle) ── */}
+          {isStreaming && autoRefreshCountdown != null && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{
+                height: 3, borderRadius: 2,
+                background: T.refreshBarBg,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${((10 - autoRefreshCountdown) / 10) * 100}%`,
+                  background: 'linear-gradient(90deg, #22c984, #4ade80)',
+                  borderRadius: 2,
+                  transition: 'width 1s linear',
+                }} />
+              </div>
+              <div style={{ fontSize: 8, color: T.muted, marginTop: 2, textAlign: 'right' }}>
+                Auto-refresh in {autoRefreshCountdown}s
+              </div>
+            </div>
+          )}
+
+          <div style={rowStyle}><span style={lbl}>Workers Safe On-Site</span><span style={val('#22c984')}>{safeLabel}</span></div>
+          <div style={rowStyle}><span style={lbl}>Workers Currently at Risk</span><span style={val('#ef4444')}>{risk}</span></div>
+          {/* ── FIXED: Always show all 4 cameras when streaming ── */}
+          <div style={rowStyle}><span style={lbl}>Active Cameras</span><span style={val('#38bdf8')}>{cams}</span></div>
+          <div style={{ ...rowStyle, borderBottom: 'none' }}><span style={lbl}>Current Shift</span><span style={val('#f59e0b')}>{shift}</span></div>
+        </>
+      )
+    }
+
+    // ── CARD 2: PPE COMPLIANCE ────────────────────────────────────────────────
+    if (cardId === 'compliance') {
+      // ── FIXED: Show actual values, never force 0% — fall back gracefully ──
+      const overall = scopedCompliance != null ? `${scopedCompliance}%` : '—'
+      const helmet  = scopedHelmet     != null ? `${scopedHelmet}%`     : '—'
+      const vest    = scopedVest       != null ? `${scopedVest}%`       : '—'
+      const full    = scopedBothPpe    != null ? `${scopedBothPpe}%`    : '—'
+      return (
+        <>
+          <div style={rowStyle}><span style={lbl}>Overall PPE Compliance</span><span style={val('#f59e0b')}>{overall}</span></div>
+          <div style={rowStyle}><span style={lbl}>Helmet Compliance</span><span style={val('#4ade80')}>{helmet}</span></div>
+          <div style={rowStyle}><span style={lbl}>Vest Compliance</span><span style={val('#4ade80')}>{vest}</span></div>
+          <div style={{ ...rowStyle, borderBottom: 'none' }}><span style={lbl}>Full PPE Compliance</span><span style={val('#38bdf8')}>{full}</span></div>
+        </>
+      )
+    }
+
+    // ── CARD 3: RISK HOTSPOT ──────────────────────────────────────────────────
+    if (cardId === 'violations') {
+      // ── FIXED: topCamId now comes from cameraSafe sorted by violation_count desc ──
+      const topCamId  = scopedTopCamera   ?? '—'
+      const topCamLoc = topCamId !== '—' ? (DB_ID_TO_LOCATION[topCamId] ?? null) : null
+      const peakTime  = scopedPeakTime    ?? '—'
+      const topType   = topViolationType  ?? '—'
+      const totalV    = scopedViolations  ?? '—'
+      return (
+        <>
+          <div style={rowStyle}>
+            <span style={lbl}>Highest Violation Camera</span>
+            <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+              <span style={{ ...val('#ef4444'), fontSize: compact ? 10 : 11, fontFamily: 'monospace', fontWeight: 700, color: '#ef4444' }}>{topCamId}</span>
+              {topCamLoc && (
+                <span style={{ fontSize: 9, color: T.muted, fontFamily: 'inherit', fontWeight: 500 }}>{topCamLoc}</span>
+              )}
+            </span>
+          </div>
+          <div style={rowStyle}><span style={lbl}>Peak Violation Time</span><span style={val('#f59e0b')}>{peakTime}</span></div>
+          <div style={rowStyle}><span style={lbl}>Top Violation Type</span><span style={val('#fca5a5')}>{topType}</span></div>
+          <div style={{ ...rowStyle, borderBottom: 'none' }}><span style={lbl}>Total Violations Today</span><span style={val('#ef4444')}>{totalV}</span></div>
+        </>
+      )
+    }
+
+    // ── CARD 4: SAFETY TREND ─────────────────────────────────────────────────
+    if (cardId === 'ppe_violations') {
+      const hasImprovement = safetyImprovementPct !== null && safetyImprovementPct !== undefined
+      const impColor = hasImprovement
+        ? (safetyImprovementPct > 0 ? '#22c984' : safetyImprovementPct < 0 ? '#ef4444' : '#64748b')
+        : '#64748b'
+      const impArrow = hasImprovement
+        ? (safetyImprovementPct > 0 ? '↑' : safetyImprovementPct < 0 ? '↓' : '→')
+        : ''
+      const impLabel = hasImprovement
+        ? `${impArrow} ${Math.abs(safetyImprovementPct)}% vs Yesterday`
+        : 'No prev-day data'
+
+      const hasHelmetDelta = helmetDelta !== null && helmetDelta !== undefined
+      const hDeltaStr = hasHelmetDelta
+        ? `${helmetDelta >= 0 ? '+' : ''}${helmetDelta}%`
+        : (scopedHelmet != null ? `${scopedHelmet}% today` : '—')
+      const hColor = hasHelmetDelta
+        ? (helmetDelta >= 0 ? '#22c984' : '#ef4444')
+        : (scopedHelmet != null ? '#4ade80' : '#64748b')
+
+      const hasVestDelta = vestDelta !== null && vestDelta !== undefined
+      const vDeltaStr = hasVestDelta
+        ? `${vestDelta >= 0 ? '+' : ''}${vestDelta}%`
+        : (scopedVest != null ? `${scopedVest}% today` : '—')
+      const vColor = hasVestDelta
+        ? (vestDelta >= 0 ? '#22c984' : '#ef4444')
+        : (scopedVest != null ? '#4ade80' : '#64748b')
+
+      return (
+        <>
+          <div style={rowStyle}><span style={lbl}>Safety Improvement</span><span style={val(impColor)}>{impLabel}</span></div>
+          <div style={rowStyle}><span style={lbl}>Helmet Compliance Change</span><span style={val(hColor)}>{hDeltaStr}</span></div>
+          <div style={{ ...rowStyle, borderBottom: 'none' }}><span style={lbl}>Vest Compliance Change</span><span style={val(vColor)}>{vDeltaStr}</span></div>
+        </>
+      )
+    }
+
+    return null
+  }
+
   return (
     <div
-      onClick={onClick}
+      onClick={cardId === 'ppe_violations' ? undefined : onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        background:   isActive ? '#1a2a3a' : hover ? '#1e2d45' : '#151f2e',
-        border:       `1px solid ${isActive ? color : hover ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)'}`,
-        borderTop:    `3px solid ${color || '#5a6a82'}`,
-        borderRadius: 12,
-        padding:      compact ? '14px 16px' : '16px 18px',
-        cursor:       'pointer',
-        transition:   'background 0.15s, border-color 0.15s, transform 0.12s',
-        transform:    hover ? 'translateY(-1px)' : 'none',
-        position:     'relative',
-        userSelect:   'none',
-        minWidth:     0,
-        boxSizing:    'border-box',
-        height:       '100%',
+        // ── FIXED: proper bg/border for light vs dark ──
+        background:    isActive ? T.cardBgActive : hover ? T.cardBgHover : T.cardBg,
+        border:        `1px solid ${isActive ? color : hover ? T.borderHover : T.border}`,
+        borderLeft:    `3px solid ${color || '#5a6a82'}`,
+        borderRadius:  10,
+        padding:       compact ? '12px 14px' : '14px 16px',
+        cursor:        cardId === 'ppe_violations' ? 'default' : 'pointer',
+        transition:    'background 0.15s, border-color 0.15s, box-shadow 0.15s',
+        boxShadow:     hover && cardId !== 'ppe_violations' ? `0 4px 20px ${color}22` : 'none',
+        position:      'relative',
+        userSelect:    'none',
+        minWidth:      0,
+        boxSizing:     'border-box',
+        height:        '100%',
+        display:       'flex',
+        flexDirection: 'column',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ fontSize: 34, flexShrink: 0 }}>{icon}</div>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: '#e2e8f0', lineHeight: 1.25 }}>{label}</div>
-        </div>
-        <div style={{ fontSize: 44, fontWeight: 700, color: color || '#e2e8f0', lineHeight: 1, marginTop: -6 }}>
-          {value}
-        </div>
+      {/* Card header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{
+          background:    T.labelBg,
+          border:        `1px solid ${T.labelBorder}`,
+          borderRadius:  6, padding: '3px 7px', fontSize: 10,
+          color,         fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
+        }}>
+          {label}
+        </span>
       </div>
-      {sub && (
-        <div style={{ marginTop: 12 }}>
-          {typeof sub === 'string'
-            ? <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>{sub}</div>
-            : sub
-          }
+      {/* Subtitle — FIXED: use T.text so it's dark on light bg, light on dark bg */}
+      <div style={{ fontSize: compact ? 11 : 12, fontWeight: 700, color: T.text, marginBottom: 10, lineHeight: 1.3 }}>
+        {subtitle}
+      </div>
+      {/* Rows */}
+      <div style={{ flex: 1 }}>
+        {renderRows()}
+      </div>
+      {/* click-for-chart hint — only for cards that open a modal */}
+      {cardId !== 'ppe_violations' && (
+        <div style={{ marginTop: 8, fontSize: 9, color: T.hint, textAlign: 'right', letterSpacing: '0.05em' }}>
+          click for trend ↗
         </div>
       )}
     </div>
@@ -553,18 +831,26 @@ function StatCard({ icon, label, value, color, sub, onClick, isActive, compact }
 
 // ─── CARDS CONFIG ─────────────────────────────────────────────────────────────
 const CARDS = [
-  { id: 'workers',        icon: '👷', label: 'Workers Safe On-Site', colorKey: '#22c984' },
-  { id: 'violations',     icon: '🚨', label: 'Max Violations',       colorKey: '#ef4444' },
-  { id: 'compliance',     icon: '🦺', label: 'PPE Compliance',       colorKey: '#f59e0b' },
-  { id: 'ppe_violations', icon: '⚠️', label: 'PPE Violations',       colorKey: '#ef4444' },
+  { id: 'workers',        icon: '🟢', label: 'LIVE STATUS',       subtitle: 'Live Workforce Safety',  colorKey: '#22c984' },
+  { id: 'compliance',     icon: '🦺', label: 'PPE COMPLIANCE',    subtitle: 'PPE Compliance Summary', colorKey: '#f59e0b' },
+  { id: 'violations',     icon: '📍', label: 'RISK HOTSPOT',      subtitle: 'Risk Hotspot',           colorKey: '#ef4444' },
+  { id: 'ppe_violations', icon: '📈', label: 'SAFETY TREND',      subtitle: 'Safety Trend & Insights',colorKey: '#22c984' },
 ]
+
+// ── FIXED: DB_ID_TO_LOCATION maps camera db_id → human location label ─────────
 const DB_ID_TO_LOCATION = {
   'Pier_Cap_Cam_16389': 'Bangalore',
   'Pier_Cap_Cam_16388': 'Hyderabad',
   'Pier_Cap_Cam_16387': 'Chennai · Location 1',
   'Pier_Cap_Cam_16386': 'Chennai · Location 2',
 }
+
+// All known cameras (used for streaming active camera count)
+const ALL_KNOWN_CAMERAS = Object.keys(DB_ID_TO_LOCATION)
+const TOTAL_CAMERA_COUNT = ALL_KNOWN_CAMERAS.length // always 4
+
 const getCityLabel = (cameraId) => DB_ID_TO_LOCATION[cameraId] || cameraId
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function StatCardsPanel({
   isLoading, todaySafe, todayViols, displaySafe, displayViolated, displayTotal,
@@ -572,6 +858,12 @@ export default function StatCardsPanel({
   shiftSafe, cameraSafe, trendData, visibleAlerts, ackAlert, selectedDate,
   selectedCamera, onClearCamera,
   selectedLocation, onClearLocation,
+  // NEW optional props for card 3 & 4 enrichment
+  compliancePrevDay,   // { helmet, vest, overall } — yesterday's compliance values
+  repeatViolators,     // number — workers who violated on multiple shifts/days
+  isStreaming,         // boolean — true when live stream is active
+  onRefreshLive,       // () => void — callback to re-fetch live data for card 1
+  theme = 'dark',      // 'dark' | 'light' — controls card color scheme
 }) {
   const [activeModal,        setActiveModal]        = useState(null)
   const [alertsOpen,         setAlertsOpen]         = useState(false)
@@ -580,11 +872,65 @@ export default function StatCardsPanel({
   const [locationKpi,        setLocationKpi]        = useState(null)
   const [locationKpiLoading, setLocationKpiLoading] = useState(false)
   const [locationCameraKpis, setLocationCameraKpis] = useState([])
+  const [globalKpi,          setGlobalKpi]          = useState(null)
+  const [liveRefreshing,     setLiveRefreshing]     = useState(false)
+  const [liveLastUpdated,    setLiveLastUpdated]    = useState(null)
+  const [prevDayKpi,         setPrevDayKpi]         = useState(null)
+  // ── NEW: auto-refresh countdown (10 seconds) ──────────────────────────────
+  const [autoRefreshCountdown, setAutoRefreshCountdown] = useState(10)
+  const autoRefreshTimerRef = useRef(null)
+  const autoRefreshCountRef = useRef(10)
 
   const cardsRowRef = useRef(null)
   const [cardsHeight, setCardsHeight] = useState(null)
 
   const alertCount = visibleAlerts?.length ?? 0
+
+  // ── FIXED: Auto-refresh every 10 seconds when streaming is active ──────────
+  const handleLiveRefresh = useCallback(async () => {
+    if (liveRefreshing) return
+    setLiveRefreshing(true)
+    // Reset countdown
+    autoRefreshCountRef.current = 10
+    setAutoRefreshCountdown(10)
+    try {
+      if (typeof onRefreshLive === 'function') await onRefreshLive()
+    } finally {
+      setLiveRefreshing(false)
+      setLiveLastUpdated(new Date())
+    }
+  }, [liveRefreshing, onRefreshLive])
+
+  // ── Auto-refresh interval + countdown tick ─────────────────────────────────
+  useEffect(() => {
+    if (!isStreaming) {
+      if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
+      return
+    }
+    // Reset on mount/streaming start
+    autoRefreshCountRef.current = 10
+    setAutoRefreshCountdown(10)
+
+    autoRefreshTimerRef.current = setInterval(() => {
+      autoRefreshCountRef.current -= 1
+      setAutoRefreshCountdown(autoRefreshCountRef.current)
+      if (autoRefreshCountRef.current <= 0) {
+        autoRefreshCountRef.current = 10
+        setAutoRefreshCountdown(10)
+        // Fire refresh (non-blocking)
+        if (typeof onRefreshLive === 'function') {
+          setLiveRefreshing(true)
+          Promise.resolve(onRefreshLive())
+            .finally(() => {
+              setLiveRefreshing(false)
+              setLiveLastUpdated(new Date())
+            })
+        }
+      }
+    }, 1000)
+
+    return () => { if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current) }
+  }, [isStreaming, onRefreshLive])
 
   // ── Measure card row height ────────────────────────────────────────────────
   useEffect(() => {
@@ -603,31 +949,83 @@ export default function StatCardsPanel({
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
+  // ── Fetch per-camera KPI when a single camera is selected ──────────────────
   useEffect(() => {
     if (!selectedDate || selectedLocation) return
     setCamKpi(null)
     const realId = selectedCamera?.db_id || selectedCamera?.id
     if (!realId) return
     fetch(`/api/kpi?date=${selectedDate}&camera=${encodeURIComponent(realId)}`)
-      .then(r => r.ok ? r.json() : null).then(setCamKpi).catch(() => setCamKpi(null))
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setCamKpi(data))
+      .catch(() => setCamKpi(null))
   }, [selectedDate, selectedCamera, selectedLocation])
 
+  // ── Fetch & aggregate KPIs for a selected location (deduped by db_id) ──────
   useEffect(() => {
-    if (!selectedDate || !selectedLocation) { setLocationKpi(null); setLocationCameraKpis([]); return }
-    const cameras = getAllCamerasForLocation(selectedLocation)
-    if (!cameras.length) { setLocationKpi(null); setLocationCameraKpis([]); return }
+    if (!selectedDate || !selectedLocation) {
+      setLocationKpi(null)
+      setLocationCameraKpis([])
+      return
+    }
+    const allCameras  = getAllCamerasForLocation(selectedLocation)
+    const uniqueDbIds = getUniqueDbIdsForLocation(selectedLocation)
+    if (!uniqueDbIds.length) {
+      setLocationKpi(null)
+      setLocationCameraKpis([])
+      return
+    }
     setLocationKpiLoading(true)
-    Promise.all(cameras.map(camera => {
-      const realId = camera.db_id || camera.id
-      return fetch(`/api/kpi?date=${selectedDate}&camera=${encodeURIComponent(realId)}`)
-        .then(r => r.ok ? r.json() : null).then(kpi => ({ camera, kpi })).catch(() => ({ camera, kpi: null }))
-    })).then(results => {
-      setLocationCameraKpis(results)
-      setLocationKpi(aggregateKpis(results.map(r => r.kpi)))
+    setLocationKpi(null)
+    setLocationCameraKpis([])
+    Promise.all(
+      uniqueDbIds.map(dbId =>
+        fetch(`/api/kpi?date=${selectedDate}&camera=${encodeURIComponent(dbId)}`)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
+          .then(kpi => ({ dbId, kpi }))
+      )
+    ).then(results => {
+      const kpiByDbId = {}
+      results.forEach(({ dbId, kpi }) => { kpiByDbId[dbId] = kpi })
+      const cameraKpis = uniqueDbIds.map(dbId => ({
+        camera: allCameras.find(c => (c.db_id || c.id) === dbId) || { id: dbId, db_id: dbId },
+        kpi:    kpiByDbId[dbId] ?? null,
+      }))
+      setLocationCameraKpis(cameraKpis)
+      setLocationKpi(aggregateKpis(cameraKpis.map(r => r.kpi)))
       setLocationKpiLoading(false)
     })
   }, [selectedDate, selectedLocation])
 
+  // ── Fetch global KPI (no filter) ───────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedDate || selectedCamera || selectedLocation) return
+    fetch(`/api/kpi?date=${selectedDate}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setGlobalKpi(data))
+      .catch(() => setGlobalKpi(null))
+  }, [selectedDate, selectedCamera, selectedLocation])
+
+  // ── Fetch previous day KPI for Card 4 safety trend ─────────────────────────
+  useEffect(() => {
+    if (!selectedDate) return
+    const prevDate = (() => {
+      const d = new Date(selectedDate)
+      d.setDate(d.getDate() - 1)
+      return d.toISOString().split('T')[0]
+    })()
+    const camId = selectedCamera?.db_id || selectedCamera?.id
+    const url   = camId
+      ? `/api/kpi?date=${prevDate}&camera=${encodeURIComponent(camId)}`
+      : `/api/kpi?date=${prevDate}`
+    fetch(url)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setPrevDayKpi(data))
+      .catch(() => setPrevDayKpi(null))
+  }, [selectedDate, selectedCamera])
+
+  // ── Derived safe count from hourly trend ───────────────────────────────────
   useEffect(() => {
     if (!selectedDate || selectedLocation) return
     setDerivedSafe(null)
@@ -639,15 +1037,37 @@ export default function StatCardsPanel({
       .catch(() => setDerivedSafe(0))
   }, [selectedDate, selectedCamera, selectedLocation])
 
+  // ── Resolved KPI ──────────────────────────────────────────────────────────
   const resolvedKpi  = selectedLocation ? locationKpi : selectedCamera ? camKpi : null
-  const isKpiLoading = selectedLocation ? locationKpiLoading : (selectedCamera && !camKpi)
+  const isKpiLoading = selectedLocation ? locationKpiLoading : (!!selectedCamera && !camKpi)
 
+  // ── Card value logic ───────────────────────────────────────────────────────
   const getCardValue = id => {
     if (isLoading || isKpiLoading) return '…'
-    if (id === 'workers')        return resolvedKpi ? (resolvedKpi.total_safe ?? '—') : (derivedSafe ?? todaySafe)
-    if (id === 'violations')     return resolvedKpi ? (resolvedKpi.total_violations ?? '—') : displayViolated
-    if (id === 'compliance')     return resolvedKpi ? (resolvedKpi.compliance_pct != null ? `${resolvedKpi.compliance_pct}%` : '—') : (displayCompliance !== null ? `${displayCompliance}%` : '—')
-    if (id === 'ppe_violations') return resolvedKpi ? (resolvedKpi.compliance_pct != null ? `${100 - resolvedKpi.compliance_pct}%` : '—') : (displayCompliance !== null ? `${100 - displayCompliance}%` : '—')
+    if (id === 'workers') {
+      if (selectedLocation && locationKpi) return locationKpi.total_safe       ?? '—'
+      if (selectedCamera   && camKpi)      return camKpi.total_safe            ?? '—'
+      if (globalKpi)                       return globalKpi.total_safe         ?? todaySafe
+      return todaySafe
+    }
+    if (id === 'violations') {
+      if (selectedLocation && locationKpi) return locationKpi.total_violations ?? '—'
+      if (selectedCamera   && camKpi)      return camKpi.total_violations      ?? '—'
+      if (globalKpi)                       return globalKpi.total_violations   ?? displayViolated
+      return displayViolated
+    }
+    if (id === 'compliance') {
+      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${locationKpi.compliance_pct}%`              : '—'
+      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${camKpi.compliance_pct}%`                   : '—'
+      if (globalKpi?.compliance_pct       != null)                             return `${globalKpi.compliance_pct}%`
+      return displayCompliance !== null ? `${displayCompliance}%` : '—'
+    }
+    if (id === 'ppe_violations') {
+      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${100 - locationKpi.compliance_pct}%`         : '—'
+      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${100 - camKpi.compliance_pct}%`              : '—'
+      if (globalKpi?.compliance_pct       != null)                             return `${(100 - globalKpi.compliance_pct).toFixed(1)}%`
+      return displayCompliance !== null ? `${100 - displayCompliance}%` : '—'
+    }
     return '—'
   }
 
@@ -657,59 +1077,70 @@ export default function StatCardsPanel({
   const shiftIcon      = s => s === 'morning' ? '🌅' : s === 'afternoon' ? '☀️' : '🌙'
   const shiftName      = s => s === 'morning' ? 'Morning' : s === 'afternoon' ? 'Day' : 'Night'
 
-  // ── Peak safe hour (derived locally) ──────────────────────────────────────
-  const maxSafeVal  = trendData ? Math.max(...trendData.map(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0))), 0) : 0
-  const maxSHour    = trendData ? (trendData.find(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal)?.hour || '--') : '--'
+  // ── Peak safe hour ─────────────────────────────────────────────────────────
+  const maxSafeVal = trendData ? Math.max(...trendData.map(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0))), 0) : 0
+  const maxSHour   = trendData ? (trendData.find(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal)?.hour || '--') : '--'
 
   // ── 7-day trend helpers ────────────────────────────────────────────────────
   const yesterday        = safeWorkers7day?.slice(-2)?.[0]
   const today7           = safeWorkers7day?.slice(-1)?.[0]
   const trendVsYesterday = (yesterday && today7) ? today7.safe_count - yesterday.safe_count : null
   const violTrend        = (yesterday && today7) ? today7.violations - yesterday.violations  : null
-  
- 
 
-  
   // ── Top / worst camera derived from cameraSafe ─────────────────────────────
-  // cameraSafe = [{ camera_id, safe_count }, ...]
-  const topSafeEntry = cameraSafe?.length
-    ? [...cameraSafe].sort((a, b) => b.safe_count - a.safe_count)[0]
-    : null
-  const topViolEntry = cameraSafe?.length
-    ? [...cameraSafe].sort((a, b) => a.safe_count - b.safe_count)[0]
-    : null
+  const topSafeEntry = cameraSafe?.length ? [...cameraSafe].sort((a, b) => b.safe_count - a.safe_count)[0] : null
+  const topViolEntry = cameraSafe?.length ? [...cameraSafe].sort((a, b) => a.safe_count - b.safe_count)[0] : null
+  const topSafeCity  = topSafeEntry ?? null
+  const topViolCity  = topViolEntry ?? null
 
-  const topSafeCity = topSafeEntry ?? null
-  const topViolCity = topViolEntry ?? null
-
-  // ── Peak safe value at that hour ───────────────────────────────────────────
-  const peakSafeHourEntry = trendData?.find(
-    d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal
-  )
-  const peakSafeCount = peakSafeHourEntry
-    ? Math.max(0, (peakSafeHourEntry.workers_active || 0) - (peakSafeHourEntry.violations || 0))
-    : null
-
-  // Peak violations value at maxVHour
+  // ── Peak values ───────────────────────────────────────────────────────────
+  const peakSafeHourEntry = trendData?.find(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal)
+  const peakSafeCount     = peakSafeHourEntry ? Math.max(0, (peakSafeHourEntry.workers_active || 0) - (peakSafeHourEntry.violations || 0)) : null
   const peakViolHourEntry = trendData?.find(d => d.hour === maxVHour)
   const peakViolCount     = peakViolHourEntry ? (peakViolHourEntry.violations || 0) : null
 
   // ── vs-prev-day label helpers ──────────────────────────────────────────────
-  // trendVsYesterday / violTrend are raw count diffs (not percentages)
   const fmtDiff = (val, isGoodWhenPositive = true) => {
     if (val === null || val === undefined) return null
     const abs   = Math.abs(val)
     const up    = val > 0
     const arrow = up ? '↑' : val < 0 ? '↓' : '→'
     const color = val === 0 ? '#64748b' : (up === isGoodWhenPositive ? '#22c984' : '#ef4444')
-    const label = val === 0 ? 'no data of prev day' : `${arrow} ${abs} workers vs previous day`
+    const label = val === 0 ? 'no data of prev day' : `${arrow} ${abs} vs previous day`
     return { label, color }
   }
+
+  // ── Compliance day-over-day deltas ─────────────────────────────────────────
+  const prevDaySource = compliancePrevDay ?? (prevDayKpi ? {
+    helmet:  prevDayKpi.helmet_compliance  ?? prevDayKpi.compliance?.helmet  ?? null,
+    vest:    prevDayKpi.vest_compliance    ?? prevDayKpi.compliance?.vest    ?? null,
+    overall: prevDayKpi.compliance_pct     ?? prevDayKpi.compliance?.overall ?? null,
+  } : null)
+  const helmetToday  = compliance?.helmet ?? 0
+  const vestToday    = compliance?.vest   ?? 0
+  const helmetPrev   = prevDaySource?.helmet  ?? null
+  const vestPrev     = prevDaySource?.vest    ?? null
+  const overallPrev  = prevDaySource?.overall ?? null
+  const overallToday = displayCompliance ?? (globalKpi?.compliance_pct ?? null)
+
+  const helmetDelta  = (helmetPrev  !== null) ? Math.round(helmetToday  - helmetPrev)  : null
+  const vestDelta    = (vestPrev    !== null) ? Math.round(vestToday    - vestPrev)    : null
+  const overallDelta = (overallPrev !== null && overallToday !== null) ? Math.round(overallToday - overallPrev) : null
+
+  // ── Both PPE ───────────────────────────────────────────────────────────────
+  const bothPpePct = Math.min(helmetToday, vestToday)
+
+  // ── Safety improvement for card 4 ─────────────────────────────────────────
+  const safetyImprovementPct = overallDelta !== null ? overallDelta : null
+
+  // ── Repeat violators ──────────────────────────────────────────────────────
+  const repeatViolatorsCount = repeatViolators ?? 0
 
   // ── Card sub content ───────────────────────────────────────────────────────
   const getCardSub = id => {
     const scope   = selectedLocation?.label || selectedCamera?.name || selectedCamera?.id || null
     const loading = isKpiLoading
+
     if (scope) {
       if (loading) return 'Loading…'
       if (id === 'workers')        return scope
@@ -719,128 +1150,111 @@ export default function StatCardsPanel({
       return ''
     }
 
-    const s9 = { fontSize: 10, color: '#64748b' }
+    const isDarkSub  = theme === 'dark'
+    const s9 = { fontSize: 10, color: isDarkSub ? '#64748b' : '#94a3b8' }
+    const textColor  = isDarkSub ? '#e2e8f0' : '#0f172a'
+    const mutedColor = isDarkSub ? '#64748b'  : '#94a3b8'
 
     if (id === 'workers') {
       const diff = fmtDiff(trendVsYesterday, true)
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={{ ...s9, color: '#64748b' }}>
-            Peak @{' '}
-            <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{maxSHour}</span>
-            {peakSafeCount !== null && (
-              <span style={{ color: '#22c984', fontWeight: 700 }}> · {peakSafeCount} safe</span>
-            )}
-          </span>
           <span style={s9}>
             {shiftIcon(bestShift)} Best shift:{' '}
             <span style={{ color: '#22c984', fontWeight: 600 }}>{shiftName(bestShift)}</span>
-            <span style={{ color: '#e2e8f0', fontWeight: 700 }}> · {bestShiftCount}</span>
-            <span style={{ color: '#64748b' }}> safe</span>
+            {' · '}
+            <span style={{ color: textColor, fontWeight: 700 }}>{bestShiftCount}</span>
+            <span style={{ color: mutedColor }}> safe</span>
           </span>
           {diff && (
             <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
-          )}
-        {topSafeCity && (
-            <span style={{ ...s9, color: '#22c984' }}>
-              📍 <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{getCityLabel(topSafeCity.camera_id)}</span>
-              {' · '}{topSafeCity.safe_count} safe workers
-            </span>
           )}
         </div>
       )
     }
 
     if (id === 'violations') {
-      const diff = fmtDiff(violTrend, false) // fewer violations = good
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={{ ...s9, color: '#64748b' }}>
-            Peak @{' '}
-            <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{maxVHour || '--'}</span>
-            {peakViolCount !== null && (
-              <span style={{ color: '#ef4444', fontWeight: 700 }}> · {peakViolCount} violations</span>
-            )}
-          </span>
-          <span style={s9}>
-            ⛑️ No Helmet:{' '}
-            <span style={{ color: '#ef4444', fontWeight: 600 }}>{Math.round(100 - (compliance?.helmet || 0))}%</span>
-            {'  '}🦺 No Vest:{' '}
-            <span style={{ color: '#f59e0b', fontWeight: 600 }}>{Math.round(100 - (compliance?.vest || 0))}%</span>
-          </span>
-          {diff && (
-            <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
-          )}
-          {topViolCity && (
-            <span style={{ ...s9, color: '#ef4444' }}>
-              📍 <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{getCityLabel(topViolCity.camera_id)}</span>
-              {' · '}<span style={{ color: '#ef4444', fontWeight: 700 }}>{displayTotal - topViolCity.safe_count} violations</span>
-            </span>
-          )}
-        </div>
-      )
-    }
-
-    // AFTER — add the diff line before topSafeCity
-    if (id === 'compliance') {
-      const diff = fmtDiff(trendVsYesterday, true) // more safe = better compliance
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={s9}>
-            ⛑️ Helmet:{' '}
-            <span style={{ color: '#4ade80', fontWeight: 600 }}>{compliance?.helmet ?? 0}%</span>
-            {'  '}🦺 Vest:{' '}
-            <span style={{ color: '#4ade80', fontWeight: 600 }}>{compliance?.vest ?? 0}%</span>
-          </span>
-          <span style={s9}>
-            {shiftIcon(bestShift)} Best shift:{' '}
-            <span style={{ color: '#f59e0b', fontWeight: 600 }}>{shiftName(bestShift)}</span>
-            <span style={{ color: '#e2e8f0', fontWeight: 700 }}> · {bestShiftCount}</span>
-            <span style={{ color: '#64748b' }}> compliant</span>
-          </span>
-          {diff && (
-            <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
-          )}
-          {topSafeCity && (
-            <span style={{ ...s9, color: '#f59e0b' }}>
-              📍 <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{getCityLabel(topSafeCity.camera_id)}</span>
-              {' · '}<span style={{ color: '#4ade80', fontWeight: 700 }}>{topSafeCity.safe_count} safe workers</span>
-            </span>
-          )}
-        </div>
-      )
-    }
-
-    // AFTER — add diff line
-    if (id === 'ppe_violations') {
-      const diff = fmtDiff(violTrend, false) // fewer violations = good
+      const diff = fmtDiff(violTrend, false)
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <span style={s9}>
             ⛑️ No Helmet:{' '}
             <span style={{ color: '#ef4444', fontWeight: 600 }}>{Math.round(100 - (compliance?.helmet || 0))}%</span>
-            {' · '}
-            <span style={{ color: '#ef4444' }}>
-              {Math.round(((100 - (compliance?.helmet || 0)) / 100) * (displayTotal || 0))} workers
-            </span>
-          </span>
-          <span style={s9}>
+            {'  '}
             🦺 No Vest:{' '}
             <span style={{ color: '#f59e0b', fontWeight: 600 }}>{Math.round(100 - (compliance?.vest || 0))}%</span>
-            {' · '}
-            <span style={{ color: '#f59e0b' }}>
-              {Math.round(((100 - (compliance?.vest || 0)) / 100) * (displayTotal || 0))} workers
-            </span>
           </span>
           {diff && (
             <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
           )}
-          {topViolCity && (
-            <span style={{ ...s9, color: '#ef4444' }}>
-              📍 <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{getCityLabel(topViolCity.camera_id)}</span>
-              {' · '}<span style={{ color: '#ef4444', fontWeight: 700 }}>{displayTotal - topViolCity.safe_count} violations</span>
+        </div>
+      )
+    }
+
+    if (id === 'compliance') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={s9}>
+            Overall PPE Compliance:{' '}
+            <span style={{ color: '#f59e0b', fontWeight: 600 }}>
+              {overallToday !== null ? `${overallToday}%` : '—'}
             </span>
-          )}
+          </span>
+          <span style={s9}>
+            ⛑️ Helmet:{' '}
+            <span style={{ color: '#4ade80', fontWeight: 600 }}>{helmetToday}%</span>
+          </span>
+          <span style={s9}>
+            🦺 Vest:{' '}
+            <span style={{ color: '#4ade80', fontWeight: 600 }}>{vestToday}%</span>
+          </span>
+          <span style={s9}>
+            🔵 Both PPE:{' '}
+            <span style={{ color: '#38bdf8', fontWeight: 600 }}>{bothPpePct}%</span>
+          </span>
+        </div>
+      )
+    }
+
+    if (id === 'ppe_violations') {
+      const safetyColor = safetyImprovementPct === null ? '#64748b'
+        : safetyImprovementPct > 0 ? '#22c984'
+        : safetyImprovementPct < 0 ? '#ef4444'
+        : '#64748b'
+      const safetyArrow = safetyImprovementPct === null ? '' : safetyImprovementPct > 0 ? '↑' : safetyImprovementPct < 0 ? '↓' : '→'
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ ...s9, color: safetyColor, fontWeight: 600 }}>
+            {safetyImprovementPct !== null
+              ? `Safety Improvement: ${safetyArrow} ${Math.abs(safetyImprovementPct)}% vs Yesterday`
+              : 'Safety Improvement: — vs Yesterday'
+            }
+          </span>
+          <span style={s9}>
+            ⛑️ Helmet Change:{' '}
+            {helmetDelta !== null
+              ? <span style={{ color: helmetDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>
+                  {helmetDelta >= 0 ? '+' : ''}{helmetDelta}%
+                </span>
+              : <span style={{ color: '#64748b' }}>—</span>
+            }
+          </span>
+          <span style={s9}>
+            🦺 Vest Change:{' '}
+            {vestDelta !== null
+              ? <span style={{ color: vestDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>
+                  {vestDelta >= 0 ? '+' : ''}{vestDelta}%
+                </span>
+              : <span style={{ color: '#64748b' }}>—</span>
+            }
+          </span>
+          <span style={s9}>
+            🔁 Repeat Violators:{' '}
+            <span style={{ color: repeatViolatorsCount > 0 ? '#f59e0b' : '#22c984', fontWeight: 600 }}>
+              {repeatViolatorsCount}
+            </span>
+          </span>
         </div>
       )
     }
@@ -852,10 +1266,24 @@ export default function StatCardsPanel({
   const activeModalCard = CARDS.find(c => c.id === activeModal)
   const modalData       = { trendData, displaySafe, displayViolated, displayCompliance, compliance }
 
+  // ── FIXED: Compute top-violation camera from cameraSafe by violation_count ─
+  // Uses violation_count field first, falls back to inverse of safe_count
+  const computeTopViolCam = () => {
+    if (!cameraSafe?.length) return null
+    return [...cameraSafe].sort((a, b) => {
+      const aV = a.violation_count ?? a.violations ?? 0
+      const bV = b.violation_count ?? b.violations ?? 0
+      if (bV !== aV) return bV - aV
+      // tie-break: fewest safe = most at risk
+      return (a.safe_count ?? 0) - (b.safe_count ?? 0)
+    })[0]
+  }
+
   return (
     <>
       <style>{`
         @keyframes pulse       { 0%,100%{opacity:1} 50%{opacity:0.35} }
+        @keyframes spin        { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
         @keyframes tabPulse    {
           0%,100%{ box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -1px 0 rgba(0,0,0,0.3), inset -1px 0 0 rgba(0,0,0,0.15), 3px 3px 0 #7f1d1d, 0 0 0 rgba(239,68,68,0) }
           50%{     box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -1px 0 rgba(0,0,0,0.3), inset -1px 0 0 rgba(0,0,0,0.15), 3px 3px 0 #7f1d1d, 0 0 24px rgba(239,68,68,0.6) }
@@ -864,39 +1292,32 @@ export default function StatCardsPanel({
         @keyframes modalPop    { from{opacity:0;transform:translate(-50%,-47%) scale(0.96)} to{opacity:1;transform:translate(-50%,-50%) scale(1)} }
       `}</style>
 
-      {/* ── Chart popup modal ── */}
       {activeModal && activeModalCard && (
         <CardChartModal card={activeModalCard} data={modalData} onClose={() => setActiveModal(null)} />
       )}
-
-      {/* ── Filter banners ── */}
-      {selectedLocation && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, padding: '7px 14px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 8, fontSize: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#a5b4fc' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#6366f1', display: 'inline-block' }} />
-            <span>{selectedLocation.icon} Showing stats for location <strong>{selectedLocation.label}</strong>{' '}
-              <span style={{ color: '#64748b', fontWeight: 400 }}>({getAllCamerasForLocation(selectedLocation).length} cam{getAllCamerasForLocation(selectedLocation).length !== 1 ? 's' : ''})</span>
-            </span>
-            {locationKpiLoading && <span style={{ color: '#64748b', fontSize: 10 }}>— aggregating…</span>}
-          </div>
-          <button onClick={onClearLocation} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#64748b', cursor: 'pointer', padding: '2px 10px', fontSize: 11 }}>✕ Show all</button>
-        </div>
-      )}
       {!selectedLocation && selectedCamera && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, padding: '7px 14px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 8, fontSize: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#93c5fd' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3b82f6', display: 'inline-block' }} />
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 10, padding: '7px 14px',
+          background: theme === 'dark' ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.10)',
+          border: '1px solid rgba(59,130,246,0.25)', borderRadius: 8, fontSize: 12,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: theme === 'dark' ? '#93c5fd' : '#1d4ed8' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3b82f6', display: 'inline-block', flexShrink: 0 }} />
             <span>Showing stats for camera <strong style={{ fontFamily: 'monospace' }}>{selectedCamera.id}</strong></span>
-            {selectedCamera.name && <span style={{ color: '#64748b' }}>— {selectedCamera.name}</span>}
+            {selectedCamera.name && <span style={{ color: theme === 'dark' ? '#64748b' : '#94a3b8' }}>— {selectedCamera.name}</span>}
           </div>
-          <button onClick={onClearCamera} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, color: '#64748b', cursor: 'pointer', padding: '2px 10px', fontSize: 11 }}>✕ Show all cameras</button>
+          <button onClick={onClearCamera} style={{
+            background: 'none',
+            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.15)'}`,
+            borderRadius: 5, color: theme === 'dark' ? '#64748b' : '#475569',
+            cursor: 'pointer', padding: '2px 10px', fontSize: 11,
+          }}>✕ Show all cameras</button>
         </div>
       )}
 
-      {/* ── Main layout ── */}
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 0, marginBottom: 16, width: '100%' }}>
 
-        {/* Cards section */}
         <div
           ref={cardsRowRef}
           style={{
@@ -914,19 +1335,121 @@ export default function StatCardsPanel({
             alignItems:          'stretch',
             transition:          'grid-template-columns 0.42s cubic-bezier(0.4,0,0.2,1)',
           }}>
-            {CARDS.map(c => (
-              <StatCard
-                key={c.id}
-                icon={c.icon}
-                label={c.label}
-                value={getCardValue(c.id)}
-                color={c.colorKey}
-                sub={getCardSub(c.id)}
-                isActive={false}
-                compact={alertsOpen}
-                onClick={() => handleCardClick(c.id)}
-              />
-            ))}
+            {CARDS.map(c => {
+              // ── Resolve scoped values (location > camera > global) ───────────
+              const scopedSafe = (() => {
+                if (selectedLocation && locationKpi) return locationKpi.total_safe ?? '—'
+                if (selectedCamera   && camKpi)      return camKpi.total_safe      ?? '—'
+                if (globalKpi)                       return globalKpi.total_safe   ?? todaySafe
+                return todaySafe
+              })()
+              const scopedRisk = (() => {
+                if (selectedLocation && locationKpi) return locationKpi.total_violations ?? '—'
+                if (selectedCamera   && camKpi)      return camKpi.total_violations      ?? '—'
+                if (globalKpi)                       return globalKpi.total_violations   ?? displayViolated
+                return displayViolated
+              })()
+              const scopedTotal = (typeof scopedSafe === 'number' && typeof scopedRisk === 'number')
+                ? scopedSafe + scopedRisk : '—'
+
+              // ── FIXED: Compliance from resolved KPI, not forced 0% ──────────
+              const resolvedCompliancePct = (() => {
+                if (selectedLocation && locationKpi?.compliance_pct != null) return locationKpi.compliance_pct
+                if (selectedCamera   && camKpi?.compliance_pct      != null) return camKpi.compliance_pct
+                if (globalKpi?.compliance_pct                       != null) return globalKpi.compliance_pct
+                return displayCompliance
+              })()
+              const scopedCompliance = resolvedCompliancePct
+              // ── FIXED: helmet/vest from compliance prop; never default 0 ────
+              const scopedHelmet  = compliance?.helmet ?? null
+              const scopedVest    = compliance?.vest   ?? null
+              const scopedBothPpe = (scopedHelmet != null && scopedVest != null)
+                ? Math.min(scopedHelmet, scopedVest) : null
+
+              // ── FIXED: Card 3 — top violation camera by violation_count ──────
+              const topViolCamEntry = computeTopViolCam()
+              // Prefer violation_count; if not present sort by lowest safe (most at risk)
+              const topViolCamName  = topViolCamEntry?.camera_id ?? topViolCamEntry?.camera ?? null
+
+              // When a specific camera/location is selected, show that camera
+              const scopedTopCamera = selectedCamera?.db_id || selectedCamera?.id
+                || (selectedLocation ? topViolCamName : topViolCamName)
+                || '—'
+
+              const scopedViolations = (() => {
+                if (selectedLocation && locationKpi) return locationKpi.total_violations ?? maxViolations
+                if (selectedCamera   && camKpi)      return camKpi.total_violations      ?? maxViolations
+                if (globalKpi)                       return globalKpi.total_violations   ?? maxViolations
+                return maxViolations
+              })()
+
+              const scopedPeakTime = (() => {
+                if (!trendData?.length || !maxVHour) return '—'
+                try {
+                  const h = parseInt(maxVHour.split(':')[0])
+                  const fmt = n => `${n % 12 === 0 ? 12 : n % 12} ${n < 12 ? 'AM' : 'PM'}`
+                  return `${fmt(h)} – ${fmt(h + 2)}`
+                } catch { return maxVHour }
+              })()
+
+              const topViolationType = (() => {
+                const h = compliance?.helmet ?? 100
+                const v = compliance?.vest   ?? 100
+                if (h === 100 && v === 100) return '—'
+                return h <= v ? 'Missing Helmet' : 'Missing Vest'
+              })()
+
+              // ── FIXED: Active cameras — always 4 when streaming; else from data ──
+              const resolvedActiveCameras = isStreaming
+                ? TOTAL_CAMERA_COUNT
+                : (cameraSafe?.length
+                    ? cameraSafe.length
+                    : (trendData
+                        ? new Set(trendData.map(d => d.camera_id).filter(Boolean)).size || TOTAL_CAMERA_COUNT
+                        : TOTAL_CAMERA_COUNT))
+
+              return (
+                <StatCard
+                  key={c.id}
+                  icon={c.icon}
+                  label={c.label}
+                  subtitle={c.subtitle}
+                  value={getCardValue(c.id)}
+                  color={c.colorKey}
+                  sub={getCardSub(c.id)}
+                  cardId={c.id}
+                  isActive={false}
+                  compact={alertsOpen}
+                  onClick={() => handleCardClick(c.id)}
+                  // scoped row data
+                  scopedSafe={scopedSafe}
+                  scopedRisk={scopedRisk}
+                  scopedTotal={scopedTotal}
+                  scopedCompliance={scopedCompliance}
+                  scopedHelmet={scopedHelmet}
+                  scopedVest={scopedVest}
+                  scopedBothPpe={scopedBothPpe}
+                  scopedViolations={scopedViolations}
+                  scopedTopCamera={scopedTopCamera}
+                  scopedPeakTime={scopedPeakTime}
+                  topViolationType={topViolationType}
+                  // Card 4 deltas
+                  safetyImprovementPct={safetyImprovementPct}
+                  helmetDelta={helmetDelta}
+                  vestDelta={vestDelta}
+                  // Card 1 extras — FIXED: always 4 cameras when streaming
+                  activeCameras={resolvedActiveCameras}
+                  currentShift={shiftName(bestShift)}
+                  // Card 1 live streaming + auto-refresh
+                  isStreaming={isStreaming}
+                  onLiveRefresh={handleLiveRefresh}
+                  liveRefreshing={liveRefreshing}
+                  liveLastUpdated={liveLastUpdated}
+                  autoRefreshCountdown={isStreaming ? autoRefreshCountdown : null}
+                  theme={theme}
+                />
+              )
+            })}
           </div>
         </div>
 
@@ -967,50 +1490,30 @@ export default function StatCardsPanel({
             animation:      (!alertsOpen && alertCount > 0) ? 'tabPulse 2.2s ease-in-out infinite' : 'none',
           }}
         >
-          {/* Badge */}
           {alertCount > 0 && !alertsOpen && (
             <div style={{
-              position:       'absolute',
-              top:            -10,
-              right:          -10,
-              width:          23,
-              height:         23,
-              borderRadius:   '50%',
-              background:     '#fbbf24',
-              color:          '#1a0a00',
-              fontSize:       11,
-              fontWeight:     800,
-              display:        'flex',
-              alignItems:     'center',
-              justifyContent: 'center',
-              border:         '2.5px solid #080d18',
-              boxShadow:      '0 2px 10px rgba(251,191,36,0.6)',
-              zIndex:         20,
+              position: 'absolute', top: -10, right: -10,
+              width: 23, height: 23, borderRadius: '50%',
+              background: '#fbbf24', color: '#1a0a00',
+              fontSize: 11, fontWeight: 800,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: '2.5px solid #080d18',
+              boxShadow: '0 2px 10px rgba(251,191,36,0.6)',
+              zIndex: 20,
             }}>
               {alertCount > 9 ? '9+' : alertCount}
             </div>
           )}
-
-          {/* ALERTS vertical text */}
           <span style={{
-            writingMode:    'vertical-rl',
-            transform:      'rotate(180deg)',
-            fontSize:       15,
-            fontWeight:     900,
-            letterSpacing:  '0.28em',
-            color:          '#fff',
-            textTransform:  'uppercase',
-            textShadow:     '0 1px 4px rgba(0,0,0,0.5)',
-            lineHeight:     1,
-            flex:           1,
-            display:        'flex',
-            alignItems:     'center',
-            justifyContent: 'center',
+            writingMode: 'vertical-rl', transform: 'rotate(180deg)',
+            fontSize: 15, fontWeight: 900, letterSpacing: '0.28em',
+            color: '#fff', textTransform: 'uppercase',
+            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+            lineHeight: 1, flex: 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             ALERTS
           </span>
-
-          {/* Double chevron arrow */}
           <svg
             width="32" height="32" viewBox="0 0 24 24" fill="none"
             stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"
@@ -1018,8 +1521,7 @@ export default function StatCardsPanel({
               transform:    alertsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
               transition:   'transform 0.35s cubic-bezier(0.4,0,0.2,1)',
               filter:       'drop-shadow(0 1px 4px rgba(0,0,0,0.5))',
-              flexShrink:   0,
-              marginBottom: 2,
+              flexShrink:   0, marginBottom: 2,
               animation:    !alertsOpen ? 'bounceRight 1.6s ease-in-out infinite' : 'none',
             }}
           >
@@ -1041,15 +1543,14 @@ export default function StatCardsPanel({
           pointerEvents: alertsOpen ? 'auto' : 'none',
         }}>
           <div style={{
-            background:    alertCount > 0 ? '#1a0f0f' : '#0d1a12',
+            background:    theme === 'dark'
+              ? (alertCount > 0 ? '#1a0f0f' : '#0d1a12')
+              : (alertCount > 0 ? '#fff5f5' : '#f0fdf4'),
             border:        `1px solid ${alertCount > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,
-            borderRadius:  14,
-            padding:       '16px 18px',
+            borderRadius:  14, padding: '16px 18px',
             boxSizing:     'border-box',
-            display:       'flex',
-            flexDirection: 'column',
-            overflow:      'hidden',
-            width:         '100%',
+            display:       'flex', flexDirection: 'column',
+            overflow:      'hidden', width: '100%',
             minHeight:     cardsHeight ? `${cardsHeight}px` : 120,
             height:        cardsHeight ? `${cardsHeight}px` : 'auto',
           }}>

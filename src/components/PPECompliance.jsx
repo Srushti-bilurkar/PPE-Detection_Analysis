@@ -688,38 +688,32 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
     setError(null)
 
     try {
-      const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=500`)
+      const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=5000`)
       if (!workerRes.ok) throw new Error('Failed to load violations')
       const rawViolations = await workerRes.json()
 
       if (Array.isArray(rawViolations)) {
-        const map = {}
-        rawViolations.forEach(r => {
-          const id = r.worker_id || 'Unknown'
-          if (!map[id] || (r.timestamp || '') > (map[id].timestamp || '')) map[id] = r
-        })
-        const workers = Object.values(map)
+      // Count directly from violation_type — no deduplication
+      const total = rawViolations.length
 
-        const total = workers.length
-        const hOnly = workers.filter(r => {
-          const m = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
-          return m.includes('helmet') && !m.includes('vest')
-        }).length
-        const vOnly = workers.filter(r => {
-          const m = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
-          return !m.includes('helmet') && m.includes('vest')
-        }).length
-        const both = workers.filter(r => {
-          const m = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
-          return m.includes('helmet') && m.includes('vest')
-        }).length
+      const hOnly = rawViolations.filter(r =>
+        r.violation_type === 'no_helmet'
+      ).length
 
-        setTotalViolations(total)
-        setOnlyHelmetMiss(hOnly)
-        setOnlyVestMiss(vOnly)
-        setBothMiss(both)
+      const vOnly = rawViolations.filter(r =>
+        r.violation_type === 'no_vest'
+      ).length
 
-        await loadZoneData(apiDate, rawViolations)
+      const both = rawViolations.filter(r =>
+        r.violation_type === 'both_missing'
+      ).length
+
+      setTotalViolations(total)
+      setOnlyHelmetMiss(hOnly)
+      setOnlyVestMiss(vOnly)
+      setBothMiss(both)
+
+      await loadZoneData(apiDate, rawViolations)
       } else {
         setTotalViolations(0)
         setOnlyHelmetMiss(0)

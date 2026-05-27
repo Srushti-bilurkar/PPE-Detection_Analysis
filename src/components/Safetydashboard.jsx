@@ -82,6 +82,30 @@ function MiniCalendar({ selectedDate, onSelect }) {
   )
 }
 
+// ── Derive a clean human-readable location name from a camera object ───────
+function getCameraLocationLabel(cam) {
+  if (!cam) return null
+  if (cam.location)           return cam.location
+  if (cam.label)              return cam.label
+  const id = cam.id || ''
+  if (id.includes('HYD'))     return 'Hyderabad'
+  if (id.includes('BLR'))     return 'Bangalore'
+  if (id.includes('CHN'))     return 'Chennai'
+  return null
+}
+
+// ── Parse a timestamp string flexibly (handles IST suffix, spaces, etc.) ──
+function parseAlertTimestamp(ts) {
+  if (!ts) return null
+  if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts
+  const cleaned = String(ts)
+    .replace(' IST', '')
+    .replace(' ', 'T')
+    .trim()
+  const d = new Date(cleaned)
+  return isNaN(d.getTime()) ? null : d
+}
+
 export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kpi }) {
   const chartRef  = useRef(null)
   const chartInst = useRef(null)
@@ -98,15 +122,16 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
   const [viewMode,         setViewMode]         = useState('hourly')
   const [calOpen,          setCalOpen]          = useState(false)
   const [chartCalOpen,     setChartCalOpen]     = useState(false)
-  const [showTotal,        setShowTotal]        = useState(true)   // ← Total Workers blue line
+  const [showTotal,        setShowTotal]        = useState(true)
   const [showSafe,         setShowSafe]         = useState(true)
   const [showViols,        setShowViols]        = useState(true)
   const [safeWorkers7day,  setSafeWorkers7day]  = useState([])
   const [shiftSafe,        setShiftSafe]        = useState({ morning: 0, afternoon: 0, night: 0 })
   const [cameraSafe,       setCameraSafe]       = useState([])
 
-  // ── Camera filter state ────────────────────────────────────────────────
-  const [selectedCamera, setSelectedCamera] = useState(null)
+  // ── Camera / location filter state ────────────────────────────────────
+  const [selectedCamera,   setSelectedCamera]   = useState(null)
+  const [selectedLocation, setSelectedLocation] = useState(null)
 
   const calRef      = useRef(null)
   const chartCalRef = useRef(null)
@@ -114,7 +139,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
   // ── Close calendars on outside click ──────────────────────────────────
   useEffect(() => {
     const handler = e => {
-      if (calRef.current && !calRef.current.contains(e.target)) setCalOpen(false)
+      if (calRef.current      && !calRef.current.contains(e.target))      setCalOpen(false)
       if (chartCalRef.current && !chartCalRef.current.contains(e.target)) setChartCalOpen(false)
     }
     document.addEventListener('mousedown', handler)
@@ -128,7 +153,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     setIsLoading(true)
 
     const camId    = selectedCamera?.db_id || selectedCamera?.id || null
-    const camParam = camId ? `&camera=${camId}` : ''
+    const camParam = camId && !camId.includes(',') ? `&camera=${encodeURIComponent(camId)}` : ''
     const params   = new URLSearchParams({ date: selectedDate, shift: selectedShift })
 
     const requests = [
@@ -212,7 +237,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
     const ctx      = chartRef.current.getContext('2d')
     const datasets = [
-      // ── BLUE — Total Workers ──
       showTotal && {
         label:                'Total workers',
         data:                 totalData,
@@ -226,7 +250,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         borderWidth:          2,
         order:                1,
       },
-      // ── GREEN — Safe Workers ──
       showSafe && {
         label:                'Safe workers',
         data:                 workersData,
@@ -240,7 +263,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         borderWidth:          2.5,
         order:                2,
       },
-      // ── RED — Violations ──
       showViols && {
         label:                'Violations',
         data:                 violationsData,
@@ -344,10 +366,38 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
   }, [trendData, minuteData, viewMode, showTotal, showSafe, showViols])
 
   // ── helpers ────────────────────────────────────────────────────────────
-  const ackAlert      = (id) => setAckedIds(prev => new Set([...prev, id]))
-  const visibleAlerts = (alerts || []).filter(a =>
-    !ackedIds.has(a._id) && a.timestamp?.startsWith(selectedDate)
-  )
+  const ackAlert = (id) => setAckedIds(prev => new Set([...prev, id]))
+
+  // ── visibleAlerts: robust filter that works during streaming ──────────
+  const visibleAlerts = (alerts || []).filter(a => {
+    // Must have an id
+    if (!a._id) return false
+    // Must not be acknowledged locally
+    if (ackedIds.has(a._id)) return false
+    // Must have some form of timestamp
+    const rawTs = a.timestamp || a.camera_ts_ist || a.camera_ts || a.created_at || a.time
+    if (!rawTs) return false
+    // Parse flexibly (handles IST suffix, spaces, etc.)
+    const d = parseAlertTimestamp(rawTs)
+    if (!d) return false
+    // Match against selectedDate using local date parts to avoid UTC shift issues
+    const year  = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day   = String(d.getDate()).padStart(2, '0')
+    const dateStr = `${year}-${month}-${day}`
+    return dateStr === selectedDate
+    // NOTE: isLoading guard intentionally removed — alerts must show during live streaming
+  })
+
+  // Sort by most recent first, take top 10 for the alerts panel
+  const sortedAlerts = [...visibleAlerts].sort((a, b) => {
+    const da = parseAlertTimestamp(a.timestamp || a.camera_ts_ist || a.camera_ts || a.created_at || '')
+    const db = parseAlertTimestamp(b.timestamp || b.camera_ts_ist || b.camera_ts || b.created_at || '')
+    if (!da && !db) return 0
+    if (!da) return 1
+    if (!db) return -1
+    return db.getTime() - da.getTime()
+  })
 
   const displaySafe       = daySafe
   const displayViolated   = dayViolated
@@ -366,7 +416,69 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
   const shiftLabel    = selectedShift === 'day' ? 'Day' : selectedShift === 'night' ? 'Night' : 'All'
   const canvasVisible = viewMode === 'hourly' ? (trendData?.length > 0) : (minuteData.length > 0)
-  const chartTitle    = `📈 Safe Workers vs Violations${selectedCamera ? ` · ${selectedCamera.id}` : ''} — ${viewMode === 'minute' ? 'Per-Minute' : 'Hourly'} Trend`
+
+  const scopeLabel = selectedLocation?.label
+    || getCameraLocationLabel(selectedCamera)
+    || null
+
+  const chartTitle = `📈 Safe Workers vs Violations — ${viewMode === 'minute' ? 'Per-Minute' : 'Hourly'} Trend`
+
+  // ── Handlers from LocationCameraPanel ─────────────────────────────────
+  const handleCamSelect = (cam) => {
+    if (!cam) {
+      setSelectedCamera(null)
+      setSelectedLocation(null)
+      return
+    }
+
+    if (cam._isLocation) {
+      const fullLoc = CAMERA_LOCATIONS.find(
+        l => l.label === cam.name || l.id === cam.id
+      ) || null
+
+      if (fullLoc) {
+        setSelectedLocation(fullLoc)
+      } else {
+        let found = null
+        for (const loc of CAMERA_LOCATIONS) {
+          if (loc.subLocations) {
+            const sub = loc.subLocations.find(s => s.label === cam.name)
+            if (sub) { found = sub; break }
+          }
+        }
+        setSelectedLocation(found)
+      }
+      setSelectedCamera(null)
+      return
+    }
+
+    if (!cam.id) {
+      setSelectedCamera(null)
+      setSelectedLocation(null)
+      return
+    }
+
+    if (cam.db_id) {
+      setSelectedCamera(cam)
+      setSelectedLocation(null)
+      return
+    }
+
+    let dbId = null
+    for (const loc of CAMERA_LOCATIONS) {
+      const allCams = [
+        ...(loc.cameras || []),
+        ...(loc.subLocations?.flatMap(s => s.cameras) || [])
+      ]
+      const found = allCams.find(c => c.id === cam.id)
+      if (found?.db_id) { dbId = found.db_id; break }
+    }
+    setSelectedCamera({ ...cam, db_id: dbId || cam.id })
+    setSelectedLocation(null)
+  }
+
+  const handleClearCamera   = () => { setSelectedCamera(null);   setSelectedLocation(null) }
+  const handleClearLocation = () => { setSelectedLocation(null); setSelectedCamera(null)   }
 
   return (
     <div className="screen active" id="screen-safety-dashboard">
@@ -375,67 +487,97 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header">
           <div className="panel-title">📹 Live Camera Grid</div>
-          {selectedCamera && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
-              background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.35)',
-              borderRadius: 20, fontSize: 11, color: '#93c5fd', fontFamily: 'monospace',
-            }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', display: 'inline-block' }} />
-              Filtering: {selectedCamera.id}
-              <button
-                onClick={() => setSelectedCamera(null)}
-                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 13, padding: '0 2px', lineHeight: 1 }}
-                title="Clear camera filter"
-              >✕</button>
-            </div>
-          )}
         </div>
         <div className="panel-body">
           <LocationCameraPanel
             cameras={cameras}
-            onCamSelect={(cam) => {
-              let dbId = cam.db_id
-              if (!dbId) {
-                for (const loc of CAMERA_LOCATIONS) {
-                  const allCams = loc.cameras || loc.subLocations?.flatMap(s => s.cameras) || []
-                  const firstId = cam.id?.split(',')[0]?.trim()
-                  const found = allCams.find(c => c.id === firstId)
-                  if (found?.db_id) { dbId = found.db_id; break }
-                }
-              }
-              setSelectedCamera({ ...cam, db_id: dbId })
-            }}
+            onCamSelect={handleCamSelect}
           />
         </div>
       </div>
 
       {/* 2. DATE BAR */}
-      <div className="date-bar" style={{ position: 'relative' }}>
-        <span className="date-bar-label">📅 Viewing data for:</span>
+      <div style={{
+        display:        'flex',
+        alignItems:     'center',
+        gap:            12,
+        padding:        '7px 16px',
+        background:     'var(--bg-panel)',
+        border:         '1px solid var(--border)',
+        borderRadius:   8,
+        marginBottom:   14,
+        flexWrap:       'wrap',
+        position:       'relative',
+      }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          📅 Viewing data for:
+        </span>
+
         <div ref={calRef} style={{ position: 'relative', display: 'inline-block' }}>
           <button
             onClick={() => setCalOpen(v => !v)}
             style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px',
-              border: '1px solid var(--border)', borderRadius: 6,
-              background: 'var(--bg-panel)', color: 'var(--text-primary)',
-              fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-mono)',
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '3px 10px',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              background: calOpen ? 'rgba(124,58,237,0.12)' : 'var(--bg-base)',
+              color: calOpen ? '#c4b5fd' : 'var(--text-primary)',
+              fontSize: 13, cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
+              transition: 'background 0.15s, color 0.15s',
             }}
           >
-            📅 {selectedDate} ▾
+            {selectedDate} ▾
           </button>
           {calOpen && (
             <div style={{
               position: 'absolute', top: 'calc(100% + 6px)', left: 0,
-              zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+              zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
               borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)',
             }}>
               <MiniCalendar selectedDate={selectedDate} onSelect={date => { onDateChange(date); setCalOpen(false) }} />
             </div>
           )}
         </div>
-        <span className="date-bar-hint"></span>
+
+        {(selectedLocation || selectedCamera) && (
+          <span style={{ color: 'var(--border)', fontSize: 16, userSelect: 'none' }}>|</span>
+        )}
+
+        {(selectedLocation || selectedCamera) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+              background: selectedLocation ? '#6366f1' : '#3b82f6',
+              display: 'inline-block',
+            }} />
+            <span style={{ color: 'var(--text-muted)' }}>Showing:</span>
+            <span style={{
+              color:      selectedLocation ? '#a5b4fc' : '#93c5fd',
+              fontWeight: 700,
+            }}>
+              {selectedLocation
+                ? `${selectedLocation.icon || ''} ${selectedLocation.label}`.trim()
+                : scopeLabel || selectedCamera?.id}
+            </span>
+            <button
+              onClick={handleClearCamera}
+              style={{
+                background: 'none',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 5,
+                color: '#64748b',
+                cursor: 'pointer',
+                fontSize: 11,
+                padding: '1px 8px',
+                lineHeight: 1.6,
+              }}
+            >
+              ✕ Show all
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 3. STAT CARDS PANEL */}
@@ -454,11 +596,13 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         shiftSafe={shiftSafe}
         cameraSafe={cameraSafe}
         trendData={trendData}
-        visibleAlerts={visibleAlerts}
+        visibleAlerts={sortedAlerts}
         ackAlert={ackAlert}
         selectedDate={selectedDate}
         selectedCamera={selectedCamera}
-        onClearCamera={() => setSelectedCamera(null)}
+        onClearCamera={handleClearCamera}
+        selectedLocation={selectedLocation}
+        onClearLocation={handleClearLocation}
       />
 
       {/* 4. TREND CHART */}
@@ -468,7 +612,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
 
           <div className="panel-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
 
-            {/* Legend */}
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#a0aec0' }}>
                 <span style={{ display: 'inline-block', width: 22, height: 3, background: '#3b9eff', borderRadius: 2 }} />
@@ -487,7 +630,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               </span>
             </div>
 
-            {/* Hourly / Per Minute toggle */}
             <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', fontSize: 12 }}>
               {['hourly', 'minute'].map(mode => (
                 <button
@@ -505,7 +647,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               ))}
             </div>
 
-            {/* Chart date picker */}
             <div ref={chartCalRef} style={{ position: 'relative', display: 'inline-block' }}>
               <button
                 onClick={() => setChartCalOpen(v => !v)}
@@ -531,7 +672,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               )}
             </div>
 
-            {/* Shift selector */}
             <select
               value={selectedShift}
               onChange={e => setSelectedShift(e.target.value)}
@@ -546,13 +686,11 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
               <option value="both"  style={{ background: '#1a2236', color: '#e2e8f0' }}>🔄 Both Shifts</option>
             </select>
 
-            {/* Checkbox filters */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '4px 10px', border: '1px solid var(--border)',
               borderRadius: 4, background: 'var(--bg-panel)',
             }}>
-              
               <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'#22c55e', cursor:'pointer', userSelect:'none' }}>
                 <input
                   type="checkbox" checked={showSafe} onChange={e => setShowSafe(e.target.checked)}
@@ -573,7 +711,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         </div>
 
         <div className="panel-body">
-          {/* Peak stats bar */}
           {((viewMode === 'hourly' && trendData && trendData.length > 0) ||
             (viewMode === 'minute' && minuteData && minuteData.length > 0)) && (
             <div style={{
@@ -628,7 +765,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             </div>
           )}
 
-          {/* Chart canvas */}
           <div style={{ position: 'relative', height: 220, width: '100%' }}>
             <canvas
               ref={chartRef}
@@ -639,17 +775,17 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             />
             {isLoading && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-                Loading data{selectedCamera ? ` for ${selectedCamera.id}` : ''} · {selectedDate}…
+                Loading data{scopeLabel ? ` for ${scopeLabel}` : ''} · {selectedDate}…
               </div>
             )}
             {!isLoading && viewMode === 'hourly' && (!trendData || trendData.length === 0) && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-                No data for {shiftLabel} Shift · {selectedDate}{selectedCamera ? ` · ${selectedCamera.id}` : ''}
+                No data for {shiftLabel} Shift · {selectedDate}{scopeLabel ? ` · ${scopeLabel}` : ''}
               </div>
             )}
             {!isLoading && viewMode === 'minute' && minuteData.length === 0 && (
               <div className="text-xs text-muted" style={{ paddingTop: 80, textAlign: 'center' }}>
-                No per-minute data for {shiftLabel} Shift · {selectedDate}{selectedCamera ? ` · ${selectedCamera.id}` : ''}
+                No per-minute data for {shiftLabel} Shift · {selectedDate}{scopeLabel ? ` · ${scopeLabel}` : ''}
               </div>
             )}
           </div>
@@ -662,7 +798,6 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
           <div className="panel-title">🦺 PPE Compliance — Shift Summary</div>
           <div className="panel-subtitle">
             Helmet &amp; Vest · {selectedDate}
-            {selectedCamera && <span style={{ color: '#93c5fd', marginLeft: 8 }}>· {selectedCamera.id}</span>}
           </div>
         </div>
         <div className="panel-body">
