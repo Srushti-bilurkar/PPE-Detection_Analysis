@@ -1,3 +1,6 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# IMPORT LIBRARIES AND INITIAL SETUP
+# ═══════════════════════════════════════════════════════════════════════════
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, RedirectResponse
@@ -9,13 +12,18 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from fastapi.responses import StreamingResponse
 
-load_dotenv(dotenv_path=r"C:\Users\srustib\Desktop\yolo-frontend\.env")
+# Load environment variables from .env file
+load_dotenv()
 
-CACHE = {}
-CACHE_TTL = 15
-
+# ═══════════════════════════════════════════════════════════════════════════
+# FASTAPI APP INITIALIZATION
+# ═══════════════════════════════════════════════════════════════════════════
 app = FastAPI()
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CORS MIDDLEWARE CONFIGURATION
+# Allow all origins, methods, and headers for cross-origin requests
+# ═══════════════════════════════════════════════════════════════════════════
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,35 +31,213 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DATABASE CONNECTIONS AND COLLECTIONS SETUP
+# Connect to MongoDB and define all required collections
+# ═══════════════════════════════════════════════════════════════════════════
 client          = MongoClient("mongodb://localhost:27017")
 db              = client["construction_monitor"]
 snapshots_col   = db["snapshots"]
 ppe_results_col = db["ppe_results"]
 violations_col  = db["violations"]
 alerts_col      = db["alerts"]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SEMANTIC CACHE SETUP
+# Implements intelligent caching using sentence embeddings to match similar queries
+# Reduces API costs by reusing answers for semantically similar questions
+# ═══════════════════════════════════════════════════════════════════════════
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+# Load sentence transformer model for semantic similarity (one-time at startup)
+print("[Cache] Loading sentence transformer model...")
+_EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+print("[Cache] Model ready")
+
+# Create dedicated collection for chat cache
+chat_cache_col = db["chat_cache"]
+
+# Create TTL index for automatic cache expiration
+# sparse=True ensures permanent docs (expires_at=None) are never deleted
+chat_cache_col.create_index(
+    "expires_at",
+    expireAfterSeconds=0,
+    sparse=True
+)
+# Create index on date field for faster queries
+chat_cache_col.create_index("date")
+print("[Cache] MongoDB semantic cache ready")
+
+# ───────────────────────────────────────────────────────────────────────────
+# Generate vector embedding from text for semantic comparison
+# ───────────────────────────────────────────────────────────────────────────
+def _get_embedding(text: str) -> list:
+    vector = _EMBED_MODEL.encode(text.lower().strip())
+    return vector.tolist()
+
+# ───────────────────────────────────────────────────────────────────────────
+# Calculate cosine similarity between two vectors (0 to 1, higher = more similar)
+# ───────────────────────────────────────────────────────────────────────────
+def _cosine_similarity(vec1: list, vec2: list) -> float:
+    a = np.array(vec1)
+    b = np.array(vec2)
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    if norm == 0:
+        return 0.0
+    return float(np.dot(a, b) / norm)
+
+# ───────────────────────────────────────────────────────────────────────────
+# Determine cache type based on query content and date
+# Returns: "live" (no cache), "permanent" (past data), or "today" (short cache)
+# ───────────────────────────────────────────────────────────────────────────
+def _get_cache_type(message: str, date_from: str) -> str:
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    msg       = message.lower()
+
+    # Live queries should never be cached (real-time data)
+    live_words = ["live", "now", "current", "realtime",
+                  "real time", "right now"]
+    if any(w in msg for w in live_words):
+        return "live"
+
+    # Past date queries can be cached permanently (historical data won't change)
+    if date_from < today_str:
+        return "permanent"
+
+    # Today's queries get short-lived cache (data is still changing)
+    return "today"
+
+# ───────────────────────────────────────────────────────────────────────────
+# Check if a semantically similar query exists in cache
+# Returns cached answer if found, None otherwise
+# ───────────────────────────────────────────────────────────────────────────
+def get_semantic_cache(message: str, date_from: str) -> str | None:
+    cache_type = _get_cache_type(message, date_from)
+
+    # Skip cache for live/real-time queries
+    if cache_type == "live":
+        print("  [CACHE] live query → skipping cache")
+        return None
+
+    # Convert incoming question to vector for comparison
+    incoming_vector = _get_embedding(message)
+
+    # Fetch all cached documents for this specific date
+    cached_docs = list(chat_cache_col.find({"date": date_from}))
+
+    if not cached_docs:
+        print("  [CACHE MISS] no cached docs for this date")
+        return None
+
+    best_match      = None
+    best_similarity = 0.0
+    THRESHOLD       = 0.90  # 90% similarity threshold for cache hit
+
+    # Compare incoming query with all cached queries for this date
+    for doc in cached_docs:
+        stored_vector = doc.get("vector")
+        if not stored_vector:
+            continue
+        similarity = _cosine_similarity(incoming_vector, stored_vector)
+        print(f"  [SIMILARITY] '{doc['question'][:40]}' → {similarity:.3f}")
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_match      = doc
+
+    # Return cached answer if similarity is above threshold
+    if best_match and best_similarity >= THRESHOLD:
+        print(f"  [CACHE HIT] similarity={best_similarity:.3f}")
+        print(f"  [MATCHED]   '{best_match['question']}'")
+        return best_match["answer"]
+
+    print(f"  [CACHE MISS] best similarity={best_similarity:.3f} below {THRESHOLD}")
+    return None
+
+# ───────────────────────────────────────────────────────────────────────────
+# Save question-answer pair to semantic cache with appropriate TTL
+# ───────────────────────────────────────────────────────────────────────────
+def save_semantic_cache(
+    message:  str,
+    answer:   str,
+    date_from: str
+) -> None:
+    cache_type = _get_cache_type(message, date_from)
+
+    # Never cache live queries
+    if cache_type == "live":
+        return
+
+    # Generate vector embedding for the question
+    vector = _get_embedding(message)
+
+    # Permanent cache for historical data (no expiry)
+    if cache_type == "permanent":
+        expires_at = None
+        print(f"  [CACHE SAVE] permanent → date={date_from}")
+    else:
+        # Today's data expires in 30 seconds (data may change)
+        expires_at = datetime.now() + timedelta(seconds=30)
+        print(f"  [CACHE SAVE] today → expires in 30s")
+
+    # Construct cache document
+    doc = {
+        "question":     message,
+        "answer":       answer,
+        "date":         date_from,
+        "vector":       vector,
+        "cache_type":   cache_type,
+        "is_permanent": cache_type == "permanent",
+        "expires_at":   expires_at,
+        "saved_at":     datetime.now(),
+    }
+
+    # Insert into cache collection
+    chat_cache_col.insert_one(doc)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADDITIONAL DATABASE COLLECTIONS
+# ═══════════════════════════════════════════════════════════════════════════
 images_col      = client["yolo_images"]["images"]
 
-COLLAGE_BASE_DIR = Path(r"C:\Users\srustib\Desktop\L-T-project-L-T_Dashboard\collages")
+# ═══════════════════════════════════════════════════════════════════════════
+# DIRECTORY AND EVENT SETUP
+# ═══════════════════════════════════════════════════════════════════════════
+COLLAGE_BASE_DIR = Path(os.getenv("COLLAGE_BASE_DIR", "collages"))
 _shutdown_event  = asyncio.Event()
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CAMERA CONFIGURATION
+# Map camera IDs to their RTSP stream URLs
+# ═══════════════════════════════════════════════════════════════════════════
 CAMERAS = {
-    "CAM-A01": "rtsp://admin:admin%40123@106.51.96.174:16389/cam/realmonitor?channel=1&subtype=0",
-    "CAM-A02": "rtsp://admin:admin%40123@106.51.96.174:16388/cam/realmonitor?channel=1&subtype=0",
-    "CAM-A03": "rtsp://admin:admin%40123@106.51.96.174:16387/cam/realmonitor?channel=1&subtype=0",
-    "CAM-A07": "rtsp://admin:admin%40123@106.51.96.174:16386/cam/realmonitor?channel=1&subtype=0",
+    key[len("CAMERA_"):].replace("_", "-"): val
+    for key, val in os.environ.items()
+    if key.startswith("CAMERA_")
 }
-
+# ═══════════════════════════════════════════════════════════════════════════
+# HLS STREAMING SETUP
+# Directory for storing HLS stream segments
+# ═══════════════════════════════════════════════════════════════════════════
 HLS_DIR = Path("hls")
 HLS_DIR.mkdir(parents=True, exist_ok=True)
 _ffmpeg_procs: dict = {}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FFMPEG STREAM MANAGEMENT
+# Functions to start, manage, and stop RTSP to HLS conversion
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FFMPEG
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Start FFmpeg process to convert RTSP stream to HLS format
+# Automatically restarts on failure unless shutdown is requested
+# ───────────────────────────────────────────────────────────────────────────
 def start_ffmpeg(cam_id: str, rtsp_url: str):
+    # Create camera-specific directory for HLS segments
     cam_dir = HLS_DIR / cam_id
     cam_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Clean up old segment files
     for old_file in cam_dir.glob("*.ts"):
         try: old_file.unlink()
         except Exception: pass
@@ -59,6 +245,7 @@ def start_ffmpeg(cam_id: str, rtsp_url: str):
         try: old_file.unlink()
         except Exception: pass
 
+    # FFmpeg command for RTSP to HLS conversion with optimized settings
     cmd = [
         "ffmpeg", "-rtsp_transport", "tcp", "-fflags", "+genpts",
         "-i", rtsp_url,
@@ -71,6 +258,7 @@ def start_ffmpeg(cam_id: str, rtsp_url: str):
         str(cam_dir / "stream.m3u8"), "-y",
     ]
 
+    # Run FFmpeg in separate thread with auto-restart on failure
     def run():
         while not _shutdown_event.is_set():
             print(f"[Camera] Starting {cam_id} ...")
@@ -88,17 +276,24 @@ def start_ffmpeg(cam_id: str, rtsp_url: str):
 
     threading.Thread(target=run, daemon=True).start()
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Stop all running FFmpeg stream processes gracefully
+# ───────────────────────────────────────────────────────────────────────────
 def stop_all_streams():
     for cam_id, proc in _ffmpeg_procs.items():
         proc.terminate()
         try: proc.wait(timeout=3)
         except subprocess.TimeoutExpired: proc.kill()
 
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# Utility functions for data processing and query building
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Serialize MongoDB document to JSON-safe format
+# Converts ObjectId to string and datetime to ISO format
+# ───────────────────────────────────────────────────────────────────────────
 def serialize(doc):
     doc = dict(doc)
     doc["_id"] = str(doc["_id"])
@@ -109,7 +304,10 @@ def serialize(doc):
             doc[k] = [str(i) if isinstance(i, ObjectId) else i for i in v]
     return doc
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Build MongoDB query to match documents by date
+# Handles multiple date formats and field names for flexible querying
+# ───────────────────────────────────────────────────────────────────────────
 def date_match(date_str: str) -> dict:
     if not date_str:
         return {}
@@ -117,31 +315,23 @@ def date_match(date_str: str) -> dict:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
         return {}
-
     dt_next      = dt + timedelta(days=1)
     alt_date_str = dt.strftime("%d-%m-%Y")
-
     return {
         "$or": [
-            # camera_ts_ist — April data (e.g. "2026-04-10 10:25:59 IST")
             {"camera_ts_ist": {"$regex": f"^{date_str}"}},
             {"camera_ts_ist": {"$regex": f"^{alt_date_str}"}},
-            # camera_ts string — May data (camera_ts_ist is empty for these)
             {"camera_ts":     {"$regex": f"^{date_str}"}},
             {"camera_ts":     {"$regex": f"^{alt_date_str}"}},
-            # camera_ts_utc — BSON ISODate field (most reliable)
             {"camera_ts_utc": {"$gte": dt, "$lt": dt_next}},
         ]
     }
 
+# ───────────────────────────────────────────────────────────────────────────
+# Safely combine date query with additional filters using $and
+# MongoDB requires explicit $and when combining $or queries
+# ───────────────────────────────────────────────────────────────────────────
 def date_and(date_q: dict, extra: dict) -> dict:
-    """
-    Safely combine a date_match() result (which has $or) with an extra filter
-    like {"camera": "..."}.
-
-    MongoDB does NOT allow merging two dicts with $or at the top level —
-    you must use $and explicitly.
-    """
     if not date_q and not extra:
         return {}
     if not date_q:
@@ -151,30 +341,37 @@ def date_and(date_q: dict, extra: dict) -> dict:
     # Always use $and to combine — never merge keys
     return {"$and": [date_q, extra]}
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Extract timestamp from document (tries multiple field names)
+# ───────────────────────────────────────────────────────────────────────────
 def get_ts(doc: dict) -> str:
     return doc.get("camera_ts_ist") or doc.get("camera_ts") or doc.get("analyzed_at_ist") or ""
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get total number of persons detected in a document
+# ───────────────────────────────────────────────────────────────────────────
 def get_total_persons(doc: dict) -> int:
     return doc.get("summary", {}).get("total_persons", 0) or doc.get("total_persons_count", 0)
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get total violations count from a document
+# ───────────────────────────────────────────────────────────────────────────
 def get_total_violations(doc: dict) -> int:
     return doc.get("summary", {}).get("violations", 0) or doc.get("total_violation_count", 0)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PPE ANALYSIS HELPERS
+# Core functions for counting persons, violations, and processing PPE data
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE HELPERS  (defined ONCE here — used everywhere below)
-# ─────────────────────────────────────────────────────────────────────────────
+# Define valid violation types for PPE compliance
 VIOLATION_TYPES = {"no_helmet", "no_vest", "both_missing"}
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Count total workers/persons in a document
+# Tries multiple fields in priority order
+# ───────────────────────────────────────────────────────────────────────────
 def _persons_count(doc: dict) -> int:
-    """
-    Return workers seen by this camera in this frame.
-    Priority: all_persons[] > persons_count > total_persons_count > summary.total_persons
-    """
     all_p = doc.get("all_persons")
     if all_p and isinstance(all_p, list) and len(all_p) > 0:
         return len(all_p)
@@ -186,15 +383,19 @@ def _persons_count(doc: dict) -> int:
     if v: return int(v)
     return 0
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Count PPE violations in a document by analyzing ppe[] array
+# ───────────────────────────────────────────────────────────────────────────
 def _violations_count(doc: dict) -> int:
-    """Count PPE violations from the ppe[] array."""
     return sum(
         1 for p in (doc.get("ppe") or [])
         if str(p.get("violation_type") or "").strip().lower() in VIOLATION_TYPES
     )
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Build detailed alert list from PPE results
+# Extracts individual violations and formats them as alerts
+# ───────────────────────────────────────────────────────────────────────────
 def build_alert_list(raw_results):
     alerts = []
     for r in raw_results:
@@ -204,6 +405,7 @@ def build_alert_list(raw_results):
             severity = "critical" if vtype == "both_missing" else "warning"
             label    = p.get("label", "?")
 
+            # Generate human-readable message
             if vtype == "both_missing":
                 message = f"Worker {label} missing both helmet and vest"
             elif vtype == "no_helmet":
@@ -213,6 +415,7 @@ def build_alert_list(raw_results):
             else:
                 message = f"Worker {label} PPE violation"
 
+            # Extract missing PPE items from violation data
             raw_violations = p.get("Violation") or p.get("violation") or []
             missing = []
             for item in raw_violations:
@@ -224,6 +427,7 @@ def build_alert_list(raw_results):
                 elif vtype == "no_vest":      missing = ["vest"]
                 elif vtype == "both_missing": missing = ["helmet", "vest"]
 
+            # Create alert object
             alerts.append({
                 "_id":            f"{str(r['_id'])}_{idx}",
                 "camera":         r.get("camera", ""),
@@ -242,14 +446,19 @@ def build_alert_list(raw_results):
             })
     return alerts
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Calculate optimal grid dimensions for image collages
+# ───────────────────────────────────────────────────────────────────────────
 def get_grid_dims(n: int):
     import math
     cols = math.ceil(math.sqrt(n))
     rows = math.ceil(n / cols)
     return rows, cols
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Find and extract worker image from collage files
+# Locates the correct collage based on camera, timestamp, and worker ID
+# ───────────────────────────────────────────────────────────────────────────
 def find_person_image(camera: str, timestamp: str, worker_id: str):
     if not COLLAGE_BASE_DIR.exists():
         return None
@@ -263,6 +472,7 @@ def find_person_image(camera: str, timestamp: str, worker_id: str):
     except Exception:
         person_num = 1
 
+    # Find camera directory (exact or case-insensitive match)
     cam_dir = COLLAGE_BASE_DIR / camera
     if not cam_dir.exists():
         for sub in COLLAGE_BASE_DIR.iterdir():
@@ -272,6 +482,7 @@ def find_person_image(camera: str, timestamp: str, worker_id: str):
         else:
             return None
 
+    # Find all collage files for the date
     all_collages = sorted(
         list(cam_dir.glob(f"{date_str}_*persons.jpg")) +
         list(cam_dir.glob(f"{date_str}_*persons.png"))
@@ -284,6 +495,7 @@ def find_person_image(camera: str, timestamp: str, worker_id: str):
     if not all_collages:
         return None
 
+    # Find collage closest to violation timestamp
     best_file  = None
     best_delta = timedelta(days=9999)
     for f in all_collages:
@@ -302,14 +514,17 @@ def find_person_image(camera: str, timestamp: str, worker_id: str):
     if not best_file:
         return None
 
+    # Extract number of persons from filename
     try:
         n_persons = int(best_file.stem.split("_")[-1].replace("persons", ""))
     except Exception:
         n_persons = 1
 
+    # If single person collage, return entire image
     if n_persons == 1:
         return best_file.read_bytes()
 
+    # Extract specific worker from grid collage
     try:
         import cv2, numpy as np
         img = cv2.imread(str(best_file))
@@ -328,7 +543,10 @@ def find_person_image(camera: str, timestamp: str, worker_id: str):
     except Exception:
         return best_file.read_bytes()
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Calculate maximum safe workers per camera from document list
+# Returns peak safe count per camera (persons - violations)
+# ───────────────────────────────────────────────────────────────────────────
 def _calc_max_safe_from_docs(docs: list) -> dict:
     from collections import defaultdict
     cam_best = defaultdict(lambda: {"max_safe": 0, "persons": 0, "violations": 0})
@@ -343,12 +561,16 @@ def _calc_max_safe_from_docs(docs: list) -> dict:
             cam_best[cam]["violations"] = viols
     return cam_best
 
-
-
+# ───────────────────────────────────────────────────────────────────────────
+# Calculate KPI metrics from documents using peak-per-hour methodology
+# Avoids double-counting by taking maximum workers/violations per hour per camera
+# ───────────────────────────────────────────────────────────────────────────
 def calc_kpi_from_docs(docs):
     import re
     from collections import defaultdict
     hour_cam = defaultdict(lambda: defaultdict(lambda: {"max_p": 0, "max_v": 0}))
+    
+    # Group documents by hour and camera, track peak values
     for doc in docs:
         ts     = (doc.get("camera_ts_ist") or doc.get("camera_ts") or "")
         ts_str = str(ts).replace(" IST", "").strip()
@@ -366,6 +588,7 @@ def calc_kpi_from_docs(docs):
         if persons > slot["max_p"]: slot["max_p"] = persons
         if viols   > slot["max_v"]: slot["max_v"] = viols
 
+    # Sum all peak values across hours and cameras
     total_violations = 0
     total_persons    = 0
     for hour, cameras in hour_cam.items():
@@ -373,6 +596,7 @@ def calc_kpi_from_docs(docs):
             total_violations += slot["max_v"]
             total_persons    += slot["max_p"]
 
+    # Calculate derived metrics
     total_safe = max(0, total_persons - total_violations)
     compliance = round((total_safe / total_persons * 100), 1) if total_persons > 0 else 100.0
     return {
@@ -382,18 +606,25 @@ def calc_kpi_from_docs(docs):
         "compliance_pct":   compliance,
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - FRONTEND
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FRONTEND
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Redirect root URL to frontend application
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/")
 def serve_frontend():
     return RedirectResponse(url="http://localhost:5173")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - HLS STREAMING
+# Serve HLS manifests and video segments for live camera feeds
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HLS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Serve HLS playlist file (.m3u8) for camera stream
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/hls/{cam_id}/stream.m3u8")
 async def serve_m3u8(cam_id: str):
     path = HLS_DIR / cam_id / "stream.m3u8"
@@ -405,7 +636,9 @@ async def serve_m3u8(cam_id: str):
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Serve HLS video segments (.ts files) for camera stream
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/hls/{cam_id}/{segment}")
 async def serve_segment(cam_id: str, segment: str):
     path = HLS_DIR / cam_id / segment
@@ -420,10 +653,14 @@ async def serve_segment(cam_id: str, segment: str):
         },
     )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - DEBUG
+# Diagnostic endpoints for troubleshooting data and queries
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DEBUG
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Show date query matching and document samples
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/debug/dates")
 def debug_dates(date: str = None):
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -471,10 +708,11 @@ def debug_dates(date: str = None):
         "match_query_used":     str(match_q),
     }
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Diagnose camera filter effectiveness
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/debug/kpi-camera")
 def debug_kpi_camera(date: str = None, camera: str = None):
-    """Diagnose camera filter — shows matched doc count with/without camera."""
     today_str = datetime.now().strftime("%Y-%m-%d")
     use_date  = date if date else today_str
     base_q    = date_match(use_date)
@@ -495,7 +733,9 @@ def debug_kpi_camera(date: str = None, camera: str = None):
         "camera_query":      str(cam_q),
     }
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Show hourly breakdown for specific date
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/debug/hourly-10")
 def debug_hour_10(date: str = "2026-04-14"):
     query = date_match(date)
@@ -521,40 +761,55 @@ def debug_hour_10(date: str = "2026-04-14"):
         "all_cameras_in_10":    list({d["camera"] for d in hour_10_samples}),
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - CAMERA MANAGEMENT
+# Control and monitor camera streams
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CAMERAS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# List all cameras with their HLS URLs and status
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/cameras")
 def list_cameras():
     result = []
     for cam_id in CAMERAS:
         m3u8  = HLS_DIR / cam_id / "stream.m3u8"
+        # Check if playlist file exists and was modified recently (stream is active)
         ready = m3u8.exists() and (time.time() - m3u8.stat().st_mtime) < 10
         result.append({"id": cam_id, "hls_url": f"/hls/{cam_id}/stream.m3u8", "ready": ready})
     return result
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Restart a specific camera stream
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/cameras/{cam_id}/restart")
 def restart_camera(cam_id: str):
     if cam_id not in CAMERAS:
         return {"error": "Camera not found"}
+    # Terminate existing process if running
     proc = _ffmpeg_procs.get(cam_id)
     if proc and proc.poll() is None:
         proc.terminate()
+    # Start new FFmpeg process
     start_ffmpeg(cam_id, CAMERAS[cam_id])
     return {"status": "restarting", "hls_url": f"/hls/{cam_id}/stream.m3u8"}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - KPI (Key Performance Indicators)
+# Main dashboard metrics and statistics
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KPI  ← FIXED: camera filter now works correctly
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get KPI metrics for specified date and optional camera filter
+# Returns: total persons, safe workers, violations, compliance, alerts
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/kpi")
 def get_kpi(date: str = None, camera: str = None):
     today_str = datetime.now().strftime("%Y-%m-%d")
     use_date  = date if date else today_str
     match_q   = date_match(use_date)
 
+    # Apply camera filter if specified (supports comma-separated list)
     if camera:
         cam_list  = [c.strip() for c in camera.split(',')]
         cam_match = date_and(match_q, {"camera": {"$in": cam_list}})
@@ -562,10 +817,10 @@ def get_kpi(date: str = None, camera: str = None):
     else:
         docs = list(ppe_results_col.find(match_q))
 
-    # ── Peak-per-camera-per-hour, summed across day ──
+    # Calculate main KPI stats using peak-per-hour methodology
     stats = calc_kpi_from_docs(docs)
 
-    # ── Alerts ──
+    # Count open and acknowledged alerts
     alert_match = cam_match if camera else match_q
     open_raw = list(ppe_results_col.find(
         date_and(alert_match, {"$or": [
@@ -582,6 +837,8 @@ def get_kpi(date: str = None, camera: str = None):
     resolved = ppe_results_col.count_documents(
         date_and(alert_match, {"acknowledged": True})
     )
+    
+    # Count active cameras
     active_cameras = (
         len(cam_list) if camera
         else len(ppe_results_col.distinct("camera", match_q))
@@ -601,9 +858,15 @@ def get_kpi(date: str = None, camera: str = None):
         "resolved_alerts":  resolved,
         "open_alerts":      len(open_raw),
     }
-# ─────────────────────────────────────────────────────────────────────────────
-# ALERTS
-# ─────────────────────────────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - ALERTS
+# Manage and query safety alerts
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+# Get alerts for specified date with optional filters
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/alerts")
 def get_alerts(limit: int = 200, date: str = None, show_all: bool = False):
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -614,12 +877,16 @@ def get_alerts(limit: int = 200, date: str = None, show_all: bool = False):
         .limit(limit)
     )
     alerts = build_alert_list(results)
+    # Sort to show unacknowledged alerts first
     alerts.sort(key=lambda a: a["acknowledged"])
     return alerts
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Acknowledge an alert by ID
+# ───────────────────────────────────────────────────────────────────────────
 @app.post("/api/alerts/{alert_id}")
 def ack_alert(alert_id: str):
+    # Extract document ID from composite alert ID
     real_id = alert_id.split("_")[0]
     try:
         ppe_results_col.update_one(
@@ -630,12 +897,17 @@ def ack_alert(alert_id: str):
         pass
     return {"status": "acknowledged"}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE RESULTS
+# Query raw PPE analysis results
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE RESULTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get PPE analysis results with optional date and camera filters
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-results")
 def get_ppe_results(limit: int = 20, date: str = None, camera: str = None):
+    # Build query based on provided filters
     if date and camera:
         query = date_and(date_match(date), {"camera": camera})
     elif date:
@@ -647,10 +919,14 @@ def get_ppe_results(limit: int = 20, date: str = None, camera: str = None):
     docs = list(ppe_results_col.find(query).sort("analyzed_at_ist", DESCENDING).limit(limit))
     return [serialize(d) for d in docs]
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - VIOLATIONS (LEGACY)
+# Legacy violation endpoints for backward compatibility
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VIOLATIONS (legacy)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get violations from legacy violations collection
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/violations")
 def get_violations(limit: int = 100, date: str = None):
     if date:
@@ -671,6 +947,7 @@ def get_violations(limit: int = 100, date: str = None):
     result = []
     for d in docs:
         s = serialize(d)
+        # Ensure missing_ppe field exists for compatibility
         if "missing" in s and "missing_ppe" not in s:
             s["missing_ppe"] = s["missing"]
         s["detected_at"]     = s.get("timestamp", "")
@@ -678,21 +955,30 @@ def get_violations(limit: int = 100, date: str = None):
         result.append(s)
     return result
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE VIOLATIONS
+# Query and manage PPE violations from ppe_results collection
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE VIOLATIONS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get PPE violations with detailed information
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-violations")
 def get_ppe_violations(date: str = None, limit: int = 500):
     query = date_match(date) if date else {}
+    # Only include documents with PPE data
     query = date_and(query, {"ppe": {"$exists": True, "$ne": []}})
     docs  = list(ppe_results_col.find(query).sort("analyzed_at_ist", DESCENDING).limit(limit))
     result = []
+    
+    # Extract individual violations from each document
     for doc in docs:
         for p in doc.get("ppe", []):
             vt = p.get("violation_type", "")
+            # Only include actual violations
             if vt not in ("no_helmet", "no_vest", "both_missing"):
                 continue
+            # Parse missing PPE items from violation data
             raw     = p.get("Violation") or p.get("violation") or []
             missing = []
             for item in raw:
@@ -720,10 +1006,14 @@ def get_ppe_violations(date: str = None, limit: int = 500):
             })
     return result
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE VIOLATION COMMENTS
+# Add and retrieve comments on violations
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE VIOLATION COMMENTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Add comment to a PPE violation
+# ───────────────────────────────────────────────────────────────────────────
 @app.post("/api/ppe-violations/{doc_id}/comment")
 async def add_comment(doc_id: str, request: Request):
     from fastapi import HTTPException
@@ -733,7 +1023,9 @@ async def add_comment(doc_id: str, request: Request):
         worker_id = body.get("worker_id", "")
         if not comment:
             raise HTTPException(status_code=400, detail="Comment is empty")
+        # Extract real document ID from composite ID
         real_id = doc_id.split("_")[0]
+        # Push comment to comments array
         ppe_results_col.update_one(
             {"_id": ObjectId(real_id)},
             {"$push": {
@@ -748,7 +1040,9 @@ async def add_comment(doc_id: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get all comments for a specific violation
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-violations/{doc_id}/comments")
 def get_comments(doc_id: str):
     from fastapi import HTTPException
@@ -759,10 +1053,14 @@ def get_comments(doc_id: str):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid id")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE VIOLATION ACKNOWLEDGMENT
+# Mark violations as acknowledged
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE VIOLATION ACK  (defined ONCE)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Acknowledge a PPE violation
+# ───────────────────────────────────────────────────────────────────────────
 @app.post("/api/ppe-violations/{doc_id}/ack")
 async def ack_ppe_violation(doc_id: str, request: Request):
     from fastapi import HTTPException
@@ -783,15 +1081,21 @@ async def ack_ppe_violation(doc_id: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE VIOLATION SNAPSHOTS
+# Retrieve annotated images for violations
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE VIOLATION SNAPSHOT
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get snapshot image for a specific PPE violation
+# Returns annotated image with bounding box and violation details
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-violations/{doc_id}/snapshot")
 def get_ppe_violation_snapshot(doc_id: str, label: str = None):
     from fastapi import HTTPException
     import cv2, numpy as np
 
+    # Fetch violation document
     try:
         doc = ppe_results_col.find_one({"_id": ObjectId(doc_id)})
     except Exception:
@@ -799,6 +1103,7 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
 
+    # Find specific PPE entry (by label or use first)
     ppe_list  = doc.get("ppe", [])
     ppe_entry = None
     if label:
@@ -808,6 +1113,7 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
     if not ppe_entry:
         raise HTTPException(status_code=404, detail="No PPE entry found")
 
+    # Try to get cropped image from collage metadata first
     collage_id = doc.get("collage_id")
     if collage_id:
         collage = db["collages"].find_one({"_id": collage_id})
@@ -817,6 +1123,7 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
             matching_meta = next((p for p in persons_meta if p.get("label") == target_label), None)
             if matching_meta and matching_meta.get("crop_b64"):
                 try:
+                    # Decode and annotate cropped image
                     img_bytes = base64.b64decode(matching_meta["crop_b64"])
                     img_array = np.frombuffer(img_bytes, dtype=np.uint8)
                     crop_img  = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
@@ -824,11 +1131,13 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
                         missing     = ppe_entry.get("Violation") or ppe_entry.get("violation") or []
                         missing_str = " + ".join(missing)
                         h, w        = crop_img.shape[:2]
+                        # Add red header with violation info
                         cv2.rectangle(crop_img, (0, 0), (w, 30), (0, 0, 200), -1)
                         cv2.putText(crop_img,
                                     f"{target_label} — MISSING: {missing_str}",
                                     (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                                     (255, 255, 255), 1, cv2.LINE_AA)
+                        # Add red border
                         cv2.rectangle(crop_img, (0, 0), (w-1, h-1), (0, 0, 255), 3)
                         _, buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                         return Response(content=buf.tobytes(), media_type="image/jpeg",
@@ -836,6 +1145,7 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
                 except Exception:
                     pass
 
+    # Fallback: Get full snapshot and draw bounding box
     snap_id = doc.get("snap_id") or ppe_entry.get("snap_id")
     if not snap_id:
         raise HTTPException(status_code=404, detail="No snap_id found")
@@ -844,11 +1154,13 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
     try:
+        # Decode base64 image
         img_bytes = base64.b64decode(snap["image"])
         img_array = np.frombuffer(img_bytes, dtype=np.uint8)
         img       = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         if img is None:
             raise ValueError("Cannot decode image")
+        # Draw bounding box around violator
         x1 = int(ppe_entry.get("x1", 0))
         y1 = int(ppe_entry.get("y1", 0))
         x2 = int(ppe_entry.get("x2", img.shape[1]))
@@ -856,6 +1168,7 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 3)
         cv2.putText(img, f"{ppe_entry.get('label','?')} — VIOLATION",
                     (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        # Resize if too large
         h, w = img.shape[:2]
         if w > 1280:
             scale = 1280 / w
@@ -866,10 +1179,18 @@ def get_ppe_violation_snapshot(doc_id: str, label: str = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image processing error: {e}")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - VIOLATIONS BY CAMERA
+# Aggregate violations by camera
+# ═══════════════════════════════════════════════════════════════════════════
 
+# ───────────────────────────────────────────────────────────────────────────
+# Get violation count grouped by camera
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/violations-by-camera")
 def get_violations_by_camera(date: str = None):
     query    = date_match(date) if date else {}
+    # Aggregation pipeline to count violations per camera
     pipeline = [
         {"$match": query},
         {"$unwind": "$ppe"},
@@ -880,7 +1201,14 @@ def get_violations_by_camera(date: str = None):
     results = list(ppe_results_col.aggregate(pipeline))
     return [{"camera": r["_id"], "count": r["count"]} for r in results if r["_id"]]
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - VIOLATION DEBUG & SNAPSHOTS (LEGACY)
+# Debug and image retrieval for legacy violations
+# ═══════════════════════════════════════════════════════════════════════════
 
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Show violation document details and available collages
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/violations/{violation_id}/debug")
 def debug_violation(violation_id: str):
     from fastapi import HTTPException
@@ -905,7 +1233,9 @@ def debug_violation(violation_id: str):
         "collages_for_date":   [f.name for f in collages[:10]],
     }
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get snapshot image for legacy violation
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/violations/{violation_id}/snapshot")
 def get_violation_snapshot(violation_id: str):
     from fastapi import HTTPException
@@ -915,6 +1245,7 @@ def get_violation_snapshot(violation_id: str):
         raise HTTPException(status_code=400, detail="Invalid violation_id")
     if not viol:
         raise HTTPException(status_code=404, detail="Violation not found")
+    # Find worker image from collage
     img_bytes = find_person_image(
         viol.get("camera", ""), viol.get("timestamp", ""), viol.get("worker_id", ""),
     )
@@ -923,7 +1254,9 @@ def get_violation_snapshot(violation_id: str):
                         headers={"Cache-Control": "no-cache"})
     raise HTTPException(status_code=404, detail="No image found for this violation")
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Submit feedback on violation accuracy (correct/false positive)
+# ───────────────────────────────────────────────────────────────────────────
 @app.post("/api/violations/{violation_id}/feedback")
 async def post_violation_feedback(violation_id: str, request: Request):
     from fastapi import HTTPException
@@ -947,10 +1280,15 @@ async def post_violation_feedback(violation_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Invalid violation_id")
     return {"status": "ok", "verdict": verdict}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PPE COMPLIANCE
+# Calculate and report PPE compliance metrics
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PPE COMPLIANCE
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get overall PPE compliance summary for date
+# Returns helmet and vest compliance percentages
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-compliance")
 @app.get("/api/ppe-compliance-summary")
 def get_ppe_compliance(date: str = None):
@@ -965,6 +1303,7 @@ def get_ppe_compliance(date: str = None):
             "total_persons": 0,
         }
 
+    # Count total persons and violations
     total_persons = 0
     no_helmet     = 0
     no_vest       = 0
@@ -987,6 +1326,7 @@ def get_ppe_compliance(date: str = None):
             "total_persons": 0,
         }
 
+    # Calculate compliance percentages
     helmet_compliance = round((total_persons - no_helmet) / total_persons * 100, 1)
     vest_compliance   = round((total_persons - no_vest)   / total_persons * 100, 1)
 
@@ -1001,13 +1341,16 @@ def get_ppe_compliance(date: str = None):
         "not_wearing_vest":   no_vest,
     }
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get PPE compliance broken down by camera/zone
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/ppe-compliance-by-zone")
 def get_ppe_compliance_by_zone(date: str = None):
     from collections import defaultdict
     query   = date_match(date) if date else {}
     results = list(ppe_results_col.find(query))
 
+    # Track peak violations per camera
     cam_peak = defaultdict(lambda: {"max_workers": 0, "max_helmet_v": 0, "max_vest_v": 0})
 
     for doc in results:
@@ -1022,6 +1365,7 @@ def get_ppe_compliance_by_zone(date: str = None):
         if helmet_v > slot["max_helmet_v"]: slot["max_helmet_v"] = helmet_v
         if vest_v   > slot["max_vest_v"]:   slot["max_vest_v"]   = vest_v
 
+    # Format results
     result = []
     for cam, s in sorted(cam_peak.items()):
         if cam == "Unknown" and s["max_workers"] == 0:
@@ -1037,12 +1381,16 @@ def get_ppe_compliance_by_zone(date: str = None):
         })
     return result
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get compliance at daily peak occupancy
+# Shows compliance when most workers were on site
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/daily-peak-compliance")
 def get_daily_peak_compliance(date: str = None):
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
     query    = date_match(date)
+    # Find document with highest person count
     pipeline = [
         {"$match": query},
         {"$sort": {"total_persons_count": -1}},
@@ -1051,6 +1399,8 @@ def get_daily_peak_compliance(date: str = None):
     results = list(ppe_results_col.aggregate(pipeline))
     if not results:
         return {"date": date, "max_persons": 0, "message": "No documents found"}
+    
+    # Calculate compliance at peak
     doc         = results[0]
     max_persons = doc.get("total_persons_count") or len(doc.get("ppe", []))
     no_helmet   = 0
@@ -1071,10 +1421,14 @@ def get_daily_peak_compliance(date: str = None):
         "total_persons_count":          doc.get("total_persons_count"),
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - SAFE WORKERS METRICS
+# Track workers in full compliance (wearing all PPE)
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SAFE WORKERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get safe workers trend for last 7 days
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/safe-workers-7day")
 def get_safe_workers_7day(date: str = None):
     if not date:
@@ -1083,6 +1437,8 @@ def get_safe_workers_7day(date: str = None):
         end_dt = datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
         return []
+    
+    # Calculate for each of the last 7 days
     result = []
     for i in range(6, -1, -1):
         day_dt  = end_dt - timedelta(days=i)
@@ -1100,19 +1456,25 @@ def get_safe_workers_7day(date: str = None):
         })
     return result
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get safe workers summary by shift (morning/afternoon/night)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/shift-safe-summary")
 def get_shift_safe_summary(date: str = None):
     import re
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
     docs   = list(ppe_results_col.find(date_match(date)))
+    
+    # Define shift hour ranges
     SHIFTS = {
         "morning":   list(range(6,  14)),
         "afternoon": list(range(14, 22)),
         "night":     list(range(22, 24)) + list(range(0, 6)),
     }
     shift_docs = {"morning": [], "afternoon": [], "night": []}
+    
+    # Categorize documents by shift based on timestamp hour
     for doc in docs:
         ts     = (doc.get("camera_ts_ist") or doc.get("camera_ts") or
                   doc.get("analyzed_at_ist") or "")
@@ -1128,6 +1490,8 @@ def get_shift_safe_summary(date: str = None):
             if hour in hours:
                 shift_docs[shift].append(doc)
                 break
+    
+    # Calculate safe workers for each shift
     output = {}
     for shift, sdocs in shift_docs.items():
         cam_best      = _calc_max_safe_from_docs(sdocs)
@@ -1138,7 +1502,9 @@ def get_shift_safe_summary(date: str = None):
         "night":     output.get("night",     0),
     }
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get safe workers summary by camera
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/camera-safe-summary")
 def get_camera_safe_summary(date: str = None):
     if not date:
@@ -1157,10 +1523,14 @@ def get_camera_safe_summary(date: str = None):
         })
     return result
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - REPORTS
+# Generate summary reports
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# REPORTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Generate daily summary report (JSON)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/daily")
 def daily_report(date: str = None):
     if not date:
@@ -1169,6 +1539,7 @@ def daily_report(date: str = None):
     violations = list(violations_col.find({"timestamp": {"$regex": f"^{date}"}}))
     alerts     = list(alerts_col.find({"timestamp": {"$regex": f"^{date}"}}))
 
+    # Calculate averages across all frames
     frame_count    = len(results)
     avg_persons    = round(sum(get_total_persons(r)    for r in results) / frame_count) if frame_count else 0
     avg_violations = round(sum(get_total_violations(r) for r in results) / frame_count) if frame_count else 0
@@ -1191,15 +1562,21 @@ def daily_report(date: str = None):
         "frames_analyzed":          frame_count,
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - HOURLY TREND
+# Worker and violation trends by hour
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HOURLY TREND
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get hourly trend of workers and violations
+# Uses peak-per-hour-per-camera methodology to avoid double counting
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/hourly-trend")
 def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
     import re
     from collections import defaultdict
 
+    # Build query with optional camera filter
     query = date_match(date) if date else {}
     if camera:
         cam_list = [c.strip() for c in camera.split(',')]
@@ -1211,6 +1588,7 @@ def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
     results      = list(ppe_results_col.find(query))
     hour_camera  = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
 
+    # Group by hour and camera, track peak values
     for doc in results:
         ts     = (doc.get("camera_ts_ist") or doc.get("camera_ts") or
                   doc.get("analyzed_at_ist") or doc.get("created_at_ist") or "")
@@ -1222,6 +1600,7 @@ def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
             continue
         if hour is None or not (0 <= hour <= 23):
             continue
+        # Filter by shift if specified
         if shift == "day"   and not (6 <= hour < 18):        continue
         if shift == "night" and not (hour < 6 or hour >= 18): continue
 
@@ -1235,6 +1614,7 @@ def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
         if viols > hour_camera[hour_key][cam]["max_violations"]:
             hour_camera[hour_key][cam]["max_violations"] = viols
 
+    # Sum peaks across all cameras for each hour
     result = []
     for hour_key in sorted(hour_camera.keys()):
         data         = hour_camera[hour_key]
@@ -1247,6 +1627,7 @@ def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
             "violations":     total_viol,
         })
 
+    # Filter out future hours for today's data
     today_str = datetime.now().strftime("%Y-%m-%d")
     use_date  = date if date else today_str
     if use_date == today_str:
@@ -1255,10 +1636,14 @@ def get_hourly_trend(date: str = None, shift: str = "day", camera: str = None):
 
     return result
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - MINUTE TREND
+# Fine-grained worker trends by minute
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MINUTE TREND
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get minute-by-minute trend (similar to hourly but more granular)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/minute-trend")
 def get_minute_trend(date: str = None, shift: str = "day"):
     import re
@@ -1268,6 +1653,7 @@ def get_minute_trend(date: str = None, shift: str = "day"):
     results       = list(ppe_results_col.find(query))
     minute_camera = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
 
+    # Group by minute and camera
     for doc in results:
         ts     = (doc.get("camera_ts") or doc.get("camera_ts_ist") or
                   doc.get("analyzed_at_ist") or "")
@@ -1280,6 +1666,7 @@ def get_minute_trend(date: str = None, shift: str = "day"):
             minute = int(match.group(2))
         except:
             continue
+        # Filter by shift
         if shift == "day"   and not (6 <= hour < 18):        continue
         if shift == "night" and not (hour < 6 or hour >= 18): continue
 
@@ -1293,6 +1680,7 @@ def get_minute_trend(date: str = None, shift: str = "day"):
         if viols > minute_camera[minute_key][cam]["max_violations"]:
             minute_camera[minute_key][cam]["max_violations"] = viols
 
+    # Sum across cameras for each minute
     result = []
     for minute_key in sorted(minute_camera.keys()):
         data         = minute_camera[minute_key]
@@ -1306,10 +1694,15 @@ def get_minute_trend(date: str = None, shift: str = "day"):
         })
     return result
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - VIOLATIONS TREND
+# Monthly and yearly violation trends
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VIOLATIONS TREND — month / year view
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get violations trend by month or year
+# Returns time series data for charting
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/violations-trend")
 def get_violations_trend(mode: str = "month", shift: str = "day", date: str = None):
     import re
@@ -1318,6 +1711,7 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    # Build query based on mode (month or year view)
     if mode == "month":
         year_month = date[:7]
         query = {"$or": [
@@ -1337,6 +1731,7 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
 
     bucket_data = defaultdict(lambda: {"max_workers": 0, "critical": 0, "warning": 0})
 
+    # Group violations by date bucket (day for month view, month for year view)
     for doc in results:
         ts     = (doc.get("camera_ts_ist") or doc.get("camera_ts") or
                   doc.get("analyzed_at_ist") or "")
@@ -1346,6 +1741,7 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
             hour       = int(hour_match.group(1)) if hour_match else None
         except:
             hour = None
+        # Filter by shift
         if hour is not None:
             if shift == "day"   and not (6 <= hour < 18):        continue
             if shift == "night" and not (hour < 6 or hour >= 18): continue
@@ -1359,6 +1755,7 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
         if persons > bucket_data[bucket_key]["max_workers"]:
             bucket_data[bucket_key]["max_workers"] = persons
 
+        # Categorize violations by severity
         for p in doc.get("ppe", []):
             vt = str(p.get("violation_type") or "").strip()
             if vt == "both_missing":             bucket_data[bucket_key]["critical"] += 1
@@ -1367,6 +1764,7 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
     if not bucket_data:
         return {"labels": [], "critical": [], "warning": [], "workers": []}
 
+    # Format as time series
     sorted_keys = sorted(bucket_data.keys())
     return {
         "labels":   sorted_keys,
@@ -1375,10 +1773,14 @@ def get_violations_trend(mode: str = "month", shift: str = "day", date: str = No
         "workers":  [bucket_data[k]["max_workers"] for k in sorted_keys],
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - SNAPSHOTS
+# Retrieve snapshot images
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SNAPSHOTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get snapshot image by ID (base64 encoded)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/snapshots/{snap_id}/image")
 def get_snapshot_image(snap_id: str):
     from fastapi import HTTPException
@@ -1390,10 +1792,14 @@ def get_snapshot_image(snap_id: str):
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return {"image": doc["image"]}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - BATCH IMAGES
+# Manage batch uploaded images
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BATCH IMAGES
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get list of batch images with optional date filter
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/images")
 def get_images(date: str = None):
     query = {}
@@ -1401,7 +1807,9 @@ def get_images(date: str = None):
     docs = list(images_col.find(query).sort("batchNumber", 1))
     return [serialize(d) for d in docs]
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get sample image document to show structure
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/images/sample")
 def get_sample_image_doc():
     doc = images_col.find_one({})
@@ -1409,12 +1817,15 @@ def get_sample_image_doc():
         return {"error": "no images found"}
     doc = dict(doc)
     doc["_id"] = str(doc["_id"])
+    # Truncate large base64 fields for readability
     for field in ("data", "image", "content", "base64"):
         if field in doc and doc[field]:
             doc[field] = f"<base64 present, length={len(str(doc[field]))}>"
     return doc
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Delete an image by ID
+# ───────────────────────────────────────────────────────────────────────────
 @app.delete("/api/images/{image_id}")
 def delete_image(image_id: str):
     from fastapi import HTTPException
@@ -1424,49 +1835,31 @@ def delete_image(image_id: str):
         raise HTTPException(status_code=400, detail="Invalid image_id")
     return {"status": "deleted"}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - CHATBOT
+# AI-powered safety assistant using OpenAI GPT
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CHATBOT
-# ─────────────────────────────────────────────────────────────────────────────
 import re as _re
-import hashlib as _hashlib
 from openai import OpenAI as _OpenAI
 
-_QUERY_CACHE: dict = {}
-_QUERY_CACHE_TTL   = 300
-
-
-def _cache_key(query_plan: dict) -> str:
-    return _hashlib.md5(json.dumps(query_plan, sort_keys=True, default=str).encode()).hexdigest()
-
-def _cache_get(key: str):
-    entry = _QUERY_CACHE.get(key)
-    if entry and (time.time() - entry["ts"]) < _QUERY_CACHE_TTL:
-        return entry["value"]
-    return None
-
-def _cache_set(key: str, value: str):
-    _QUERY_CACHE[key] = {"value": value, "ts": time.time()}
-
-
+# ───────────────────────────────────────────────────────────────────────────
+# Parse natural language date references from user message
+# Returns: (date_from, date_to, human_label, is_range)
+# ───────────────────────────────────────────────────────────────────────────
 def resolve_date_range(message: str):
     now       = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
     message   = message.replace("%2F", "/").replace("%2f", "/")
 
-    print(f"  [DATE DEBUG] raw message: '{message}'")
+    # Try ISO format first (YYYY-MM-DD)
     iso = _re.search(r'\b(\d{4}-\d{2}-\d{2})\b', message)
-    print(f"  [DATE DEBUG] iso match: {iso}")
-    dmy_test = _re.search(r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b', message)
-    print(f"  [DATE DEBUG] dmy match: {dmy_test}")
-    nat1_test = _re.search(r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{4})?\b', message, _re.IGNORECASE)
-    print(f"  [DATE DEBUG] nat1 match: {nat1_test}")
     if iso:
         d = iso.group(1)
         return d, d, f"on {d}", False
 
+    # Try DD-MM-YYYY or DD/MM/YYYY format
     dmy = _re.search(r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b', message)
-    print(f"  [DATE DEBUG] dmy match: {dmy}")
     if dmy:
         day, month, year = dmy.group(1), dmy.group(2), dmy.group(3)
         try:
@@ -1476,7 +1869,7 @@ def resolve_date_range(message: str):
         except ValueError:
             pass
 
-    # ADD THIS BLOCK — handles "20th may", "may 20", "20 may", "20th may 2026"
+    # Month names mapping
     MONTHS = {
         "january":"01","february":"02","march":"03","april":"04",
         "may":"05","june":"06","july":"07","august":"08",
@@ -1485,8 +1878,7 @@ def resolve_date_range(message: str):
         "jul":"07","aug":"08","sep":"09","oct":"10","nov":"11","dec":"12"
     }
 
-    print(f"  [DATE DEBUG] nat1 match: {nat1}")
-    # pattern: "20th may 2026" or "20 may 2026" or "may 20 2026"
+    # Try "15 January 2024" format
     nat1 = _re.search(
         r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{4})?\b',
         message, _re.IGNORECASE
@@ -1501,7 +1893,7 @@ def resolve_date_range(message: str):
         except ValueError:
             pass
 
-    # pattern: "may 20th" or "may 20"
+    # Try "January 15 2024" format
     nat2 = _re.search(
         r'\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(\d{4})?\b',
         message, _re.IGNORECASE
@@ -1516,7 +1908,7 @@ def resolve_date_range(message: str):
         except ValueError:
             pass
 
-    # ADD THIS — handles "last one week", "past one week", "last week"
+    # Relative date references
     if _re.search(r'\b(last|past|previous)\s+(one\s+)?week\b', message, _re.IGNORECASE):
         start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
         return start, today_str, "last 7 days", True
@@ -1525,34 +1917,40 @@ def resolve_date_range(message: str):
         monday = now - timedelta(days=now.weekday())
         return monday.strftime("%Y-%m-%d"), today_str, "this week", True
 
+    # "last N days"
     m = _re.search(r'\blast\s+(\d+)\s+days?\b', message, _re.IGNORECASE)
     if m:
         n = int(m.group(1))
         return (now - timedelta(days=n)).strftime("%Y-%m-%d"), today_str, f"last {n} days", True
 
+    # "yesterday"
     if _re.search(r'\byesterday\b', message, _re.IGNORECASE):
         yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
         return yesterday, yesterday, "yesterday", False
 
+    # Default to today
     return today_str, today_str, "today", False
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Helper: Print formatted log banner
+# ───────────────────────────────────────────────────────────────────────────
 def _log_banner(title: str):
     print(f"\n{'='*60}\n  {title}\n{'='*60}")
 
+# ───────────────────────────────────────────────────────────────────────────
+# Helper: Print formatted log section
+# ───────────────────────────────────────────────────────────────────────────
 def _log_section(title: str, content: str = ""):
     print(f"\n{'─'*60}\n  {title}\n{'─'*60}")
     if content: print(content)
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Execute MongoDB query generated by GPT
+# Returns: (result_text, error_flag)
+# ───────────────────────────────────────────────────────────────────────────
 def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
-    ck     = _cache_key(query_plan)
-    cached = _cache_get(ck)
-    if cached:
-        _log_section(f"MONGODB RESULT  [{label}]  [FROM CACHE]")
-        print(cached)
-        return cached, True
     try:
+        # Extract query parameters
         collection_name = query_plan.get("collection", "ppe_results")
         operation       = query_plan.get("operation", "find")
         query_filter    = query_plan.get("filter", {})
@@ -1560,6 +1958,8 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
         sort_field      = query_plan.get("sort", None)
         limit           = int(query_plan.get("limit", 500))
         pipeline        = query_plan.get("pipeline", None)
+        
+        # Map collection names to actual collections
         col_map = {
             "ppe_results": ppe_results_col,
             "snapshots":   snapshots_col,
@@ -1568,6 +1968,8 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
             "collages":    db["collages"],
         }
         col = col_map.get(collection_name, ppe_results_col)
+        
+        # Execute based on operation type
         if operation == "aggregate" and pipeline:
             results = list(col.aggregate(pipeline))
         elif operation == "count":
@@ -1575,7 +1977,6 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
             result_text = f"Count result: {count}"
             _log_section(f"MONGODB RESULT  [{label}]")
             print(f"  {result_text}")
-            _cache_set(ck, result_text)
             return result_text, False
         elif operation == "distinct":
             field   = query_plan.get("field", "camera")
@@ -1587,25 +1988,30 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
             )
             _log_section(f"MONGODB RESULT  [{label}]")
             print(f"  {result_text}")
-            _cache_set(ck, result_text)
             return result_text, False
         else:
+            # Standard find operation
             cursor = col.find(query_filter, projection)
             if sort_field:
                 cursor = cursor.sort(sort_field[0], sort_field[1])
             results = list(cursor.limit(limit))
+        
         if not results:
             result_text = "No documents found matching the query."
             _log_section(f"MONGODB RESULT  [{label}]")
             print(f"  {result_text}")
-            _cache_set(ck, result_text)
             return result_text, False
+        
+        # Format and log results
         _log_section(f"MONGODB RESULT  [{label}]  —  {len(results)} document(s)")
+        print(f"  [MONGO MATCHED DOCS] : {len(results)}")
         lines = []
         for i, doc in enumerate(results):
             doc["_id"] = str(doc.get("_id", ""))
+            # Remove large fields to keep output readable
             for big_field in ("all_persons", "collage_id", "image", "crop_b64"):
                 doc.pop(big_field, None)
+            # Simplify PPE array for display
             if "ppe" in doc and isinstance(doc["ppe"], list):
                 doc["ppe"] = [
                     {"label": p.get("label", "?"), "violation_type": p.get("violation_type", "none")}
@@ -1615,7 +2021,6 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
             lines.append(line)
             print(line)
         result_text = f"Query returned {len(results)} document(s):\n" + "\n".join(lines)
-        _cache_set(ck, result_text)
         return result_text, False
     except Exception as e:
         err = f"Query execution error: {e}"
@@ -1623,108 +2028,24 @@ def run_mongo_query(query_plan: dict, label: str = "GPT-generated") -> tuple:
         print(f"  {err}")
         return err, False
 
-
-def _try_fast_path(message: str, date_from: str, date_to: str, is_range: bool):
-    msg         = message.lower()
-    pipeline    = None
-    result_text = None
-
-    if _re.search(r'\bactive\b.*\bviolation|violation.*\bactive\b|open\s+violation', msg):
-        pipeline = [
-            {"$match": {"camera_ts": {"$regex": f"^{date_from}"}}},
-            {"$unwind": "$ppe"},
-            {"$match": {"ppe.violation_type": {"$in": ["no_helmet", "no_vest", "both_missing"]}}},
-            {"$group": {
-                "_id":            "$ppe.label",
-                "camera":         {"$last": "$camera"},
-                "violation_type": {"$last": "$ppe.violation_type"},
-                "last_seen":      {"$last": "$camera_ts"},
-            }},
-            {"$sort": {"last_seen": -1}},
-        ]
-        results = list(ppe_results_col.aggregate(pipeline))
-        if not results:
-            result_text = f"No active violations found on {date_from}."
-        else:
-            lines = [f"Active violations on {date_from} — {len(results)} unique worker(s):"]
-            for r in results:
-                lines.append(
-                    f"  Worker {r['_id']} | {r['violation_type']} "
-                    f"| Camera {r['camera']} | Last seen {r['last_seen']}"
-                )
-            result_text = "\n".join(lines)
-    else:
-        range_m = _re.search(
-            r'\b(\d{1,2})(am|pm)\s*(?:to|-)\s*(\d{1,2})(am|pm)\b', msg
-        )
-        per_cam = _re.search(
-            r'\beach\s+(camera|cam)\b.*\bpeak\b|\bpeak\b.*\beach\s+(camera|cam)\b'
-            r'|\bper.camera\b|\bby.camera\b', msg
-        )
-        if range_m or per_cam:
-            if range_m:
-                h_start = int(range_m.group(1))
-                s1      = range_m.group(2).lower()
-                h_end   = int(range_m.group(3))
-                s2      = range_m.group(4).lower()
-                if s1 == "pm" and h_start != 12: h_start += 12
-                if s1 == "am" and h_start == 12: h_start = 0
-                if s2 == "pm" and h_end   != 12: h_end   += 12
-                if s2 == "am" and h_end   == 12: h_end   = 0
-                hour_patterns = [f"{h:02d}:" for h in range(h_start, h_end)]
-                hour_regex    = "|".join(hour_patterns)
-                time_label    = f"{h_start:02d}:00 to {h_end:02d}:00"
-            else:
-                hour_regex = "1[01]:"
-                time_label = "that hour"
-
-            pipeline = [
-                {"$match": {"camera_ts": {"$regex": f"^{date_from}"}}},
-                {"$match": {"camera_ts": {"$regex": hour_regex}}},
-                {"$unwind": "$ppe"},
-                {"$match": {"ppe.violation_type": {"$in": ["no_helmet", "no_vest", "both_missing"]}}},
-                {"$group": {
-                    "_id":        {"camera": "$camera", "ts": "$camera_ts"},
-                    "violations": {"$sum": 1},
-                }},
-                {"$group": {
-                    "_id":             "$_id.camera",
-                    "peak_violations": {"$max": "$violations"},
-                    "peak_at":         {"$last": "$_id.ts"},
-                }},
-                {"$sort": {"_id": 1}},
-            ]
-            results = list(ppe_results_col.aggregate(pipeline))
-            if not results:
-                result_text = f"No violations found between {time_label} on {date_from}."
-            else:
-                lines       = [f"Peak violations per camera ({time_label}) on {date_from}:\n"]
-                grand_total = 0
-                for r in results:
-                    cam  = r["_id"] or "Unknown"
-                    peak = r["peak_violations"]
-                    at   = r.get("peak_at", "")
-                    grand_total += peak
-                    lines.append(f"  {cam}: peak = {peak} violation(s)  [worst frame: {at}]")
-                lines.append(f"\n  ─────────────────────────────────")
-                lines.append(f"  SUM of all camera peaks: {grand_total} violations")
-                result_text = "\n".join(lines)
-
-    if result_text is None:
-        return None, None
-    return result_text, pipeline
-
-
+# ───────────────────────────────────────────────────────────────────────────
+# Get OpenAI client with API key from environment
+# ───────────────────────────────────────────────────────────────────────────
 def get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY not set in .env")
     return _OpenAI(api_key=api_key)
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Use GPT to generate natural language explanation from database results
+# Returns: (explanation_text, tokens_used)
+# ───────────────────────────────────────────────────────────────────────────
 def _gpt_explain(openai_client, user_message: str, db_result_text: str,
                  date_label: str, history: list) -> tuple:
     context_for_gpt = db_result_text
+    
+    # Summarize large result sets to reduce token usage
     try:
         parsed = json.loads(db_result_text) if isinstance(db_result_text, str) else db_result_text
         if isinstance(parsed, list) and len(parsed) > 5:
@@ -1746,6 +2067,7 @@ def _gpt_explain(openai_client, user_message: str, db_result_text: str,
     except Exception:
         context_for_gpt = db_result_text
 
+    # Build conversation history for context
     messages = [
         {
             "role": "system",
@@ -1759,9 +2081,12 @@ def _gpt_explain(openai_client, user_message: str, db_result_text: str,
             )
         }
     ]
+    # Add recent conversation history for context
     for h in history[-6:]:
         if h.get("role") in ("user", "assistant") and h.get("content"):
             messages.append({"role": h["role"], "content": h["content"]})
+    
+    # Add current question with database results
     messages.append({
         "role": "user",
         "content": (
@@ -1770,12 +2095,54 @@ def _gpt_explain(openai_client, user_message: str, db_result_text: str,
             f"Give a clear, complete answer using the data above."
         )
     })
+    
+    # Call GPT to generate explanation
     response = openai_client.chat.completions.create(
         model="gpt-4o", messages=messages, max_tokens=500, temperature=0.1,
     )
     return response.choices[0].message.content.strip(), response.usage.total_tokens
 
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Check if OpenAI API key is configured
+# ───────────────────────────────────────────────────────────────────────────
+@app.get("/api/debug/openai")
+def debug_openai():
+    import os
+    key = os.getenv("OPENAI_API_KEY", "NOT FOUND")
+    return {
+        "key_found": key != "NOT FOUND",
+        "key_preview": key[:12] + "..." if len(key) > 12 else key,
+    }
 
+# ───────────────────────────────────────────────────────────────────────────
+# Debug endpoint: Count violations with detailed breakdown
+# ───────────────────────────────────────────────────────────────────────────
+@app.get("/api/debug/violation-count")
+def debug_violation_count(date: str = None):
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    match_q = date_match(date)
+    docs = list(ppe_results_col.find(match_q))
+    all_ppe_count = sum(len(doc.get("ppe", [])) for doc in docs)
+    violation_count = 0
+    type_breakdown = {}
+    for doc in docs:
+        for p in doc.get("ppe", []):
+            vt = str(p.get("violation_type") or "").strip()
+            type_breakdown[vt] = type_breakdown.get(vt, 0) + 1
+            if vt in ("no_helmet", "no_vest", "both_missing"):
+                violation_count += 1
+    return {
+        "date":              date,
+        "docs_matched":      len(docs),
+        "all_ppe_entries":   all_ppe_count,
+        "actual_violations": violation_count,
+        "type_breakdown":    type_breakdown,
+    }
+
+# ───────────────────────────────────────────────────────────────────────────
+# Main chat endpoint: Process user questions with GPT and semantic caching
+# ───────────────────────────────────────────────────────────────────────────
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
     from fastapi import HTTPException
@@ -1793,6 +2160,7 @@ async def chat_endpoint(request: Request):
     _log_banner("NEW CHAT REQUEST")
     print(f"  USER    : {raw_message}")
 
+    # Handle simple greetings without AI
     GREETINGS = {
         "hi","hello","hey","good morning","good afternoon","good evening",
         "howdy","sup","greetings","hii","hiii","helo","hi there",
@@ -1815,71 +2183,83 @@ async def chat_endpoint(request: Request):
             "date":        datetime.now().strftime("%Y-%m-%d"),
         }
 
+    # Parse date from user message
     date_from, date_to, date_label, is_range = resolve_date_range(user_message)
     _log_section("DATE RESOLUTION")
     print(f"  date_from : {date_from}\n  date_to   : {date_to}\n  label     : {date_label}")
 
+    # Check semantic cache first to avoid duplicate AI calls
+    cached_answer = get_semantic_cache(user_message, date_from)
+    if cached_answer:
+        print(f"  [SEMANTIC CACHE HIT] returning cached answer")
+        return {
+            "reply":       cached_answer,
+            "tokens_used": 0,
+            "from_cache":  True,
+            "query_used":  None,
+            "date":        date_from,
+        }
+
+    # Initialize OpenAI client
     try:
         openai_client = get_openai_client()
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    fast_result, fast_pipeline = _try_fast_path(user_message, date_from, date_to, is_range, date_label)
-
-    if fast_result is not None:
-        _log_section("PATH", "FAST-PATH")
-        try:
-            reply, explain_tokens = _gpt_explain(
-                openai_client, user_message, fast_result, date_label, history
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
-        return {
-            "reply":       reply,
-            "tokens_used": explain_tokens,
-            "query_used":  {"fast_path": True, "pipeline": fast_pipeline},
-            "date":        date_from,
-        }
-
     _log_section("PATH", "GPT-PATH")
+    
+    # Sanitize message by replacing relative dates with absolute dates
     sanitized_message = user_message
     sanitized_message = _re.sub(r'\btoday\b',       f'on {date_from}', sanitized_message, flags=_re.IGNORECASE)
     sanitized_message = _re.sub(r'\byesterday\b',   f'on {date_from}', sanitized_message, flags=_re.IGNORECASE)
     sanitized_message = _re.sub(r'\blast\s+week\b', f'from {date_from} to {date_to}', sanitized_message, flags=_re.IGNORECASE)
     sanitized_message = _re.sub(r'\bthis\s+week\b', f'from {date_from} to {date_to}', sanitized_message, flags=_re.IGNORECASE)
 
-    query_prompt = f"""You are a MongoDB expert for a construction PPE monitoring system.
-
-COLLECTION: ppe_results
-SCHEMA:
-  camera_ts             : string  "2026-04-17 11:23:45 IST"
-  camera                : string  "CAM-A01"
-  persons_count         : int
-  ppe[]                 : array
-    label               : string  "W-3"
-    violation_type      : string  "no_helmet" | "no_vest" | "both_missing" | ""
-
-DATE: {date_from}  to  {date_to}
-QUESTION: "{sanitized_message}"
-
-RULES:
-1. Single day  → {{"camera_ts": {{"$regex": "^{date_from}"}}}}
-2. Range       → {{"camera_ts": {{"$gte": "{date_from}", "$lt": "{date_to}T99"}}}}
-3. ALWAYS $unwind "$ppe" BEFORE any $match on ppe.* fields
-4. Violation types → ["no_helmet", "no_vest", "both_missing"]
-5. Filter out null/empty violation_type before counting
-6. Peak per camera = group by (camera+ts) → count → group by camera → $max
-
-OUTPUT: Return ONLY raw JSON. No markdown, no backticks.
-Format: {{"collection":"ppe_results","operation":"aggregate","pipeline":[...]}}
-"""
-
     query_plan        = None
     query_result_text = ""
     query_tokens      = 0
 
+    # Create prompt for GPT to generate MongoDB query
+    query_prompt = f"""
+You are a MongoDB query generator for a construction site PPE safety system.
+
+The main collection is "ppe_results" with these fields:
+- camera: string (e.g. "CAM-A01")
+- camera_ts_ist: string timestamp (e.g. "2026-05-20 10:35:00 IST")
+- camera_ts: string timestamp fallback
+- ppe: array of objects with fields:
+    - label: string (worker id e.g. "W-1")
+    - violation_type: string — one of "no_helmet", "no_vest", "both_missing", or "" (safe)
+- persons_count: int
+- total_persons_count: int
+- acknowledged: bool
+
+Date range for this query: {date_from} to {date_to}
+User question: {sanitized_message}
+
+Return ONLY a valid JSON object (no markdown, no explanation) with this structure:
+{{
+  "collection": "ppe_results",
+  "operation": "find" | "aggregate" | "count" | "distinct",
+  "filter": {{ ... }},
+  "pipeline": [ ... ],
+  "projection": {{ ... }},
+  "sort": ["field", 1 or -1],
+  "limit": 500,
+  "field": "camera"
+}}
+
+Rules:
+- For date filtering always use: {{"$or": [{{"camera_ts_ist": {{"$regex": "^{date_from}"}}}}, {{"camera_ts": {{"$regex": "^{date_from}"}}}}]}}
+- For violation counts use aggregate with $unwind on "ppe" then $match violation_type in ["no_helmet","no_vest","both_missing"]
+- For trend over range use aggregate grouping by date prefix of camera_ts_ist
+- omit keys that are not needed
+"""
+
+    print(f"\n  [QUERY GENERATION] Asking GPT to generate MongoDB query...")
     try:
-        q_response  = openai_client.chat.completions.create(
+        # Ask GPT to generate MongoDB query
+        q_response   = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": query_prompt}],
             max_tokens=600, temperature=0,
@@ -1888,13 +2268,23 @@ Format: {{"collection":"ppe_results","operation":"aggregate","pipeline":[...]}}
         query_tokens = q_response.usage.total_tokens
         raw          = raw.replace("```json", "").replace("```", "").strip()
         query_plan   = json.loads(raw)
+        print(f"  [GENERATED QUERY PLAN] : {json.dumps(query_plan, indent=2)}")
+        print(f"  [QUERY TOKENS]         : {query_tokens}")
+    except json.JSONDecodeError as e:
+        query_result_text = f"Query parse error: {e}"
+        print(f"  [QUERY PARSE ERROR]    : {e}")
+        print(f"  [RAW GPT OUTPUT]       : {raw}")
+        query_plan = None
     except Exception as e:
         query_result_text = f"Query generation error: {e}"
-        query_plan        = None
+        print(f"  [QUERY GENERATION ERROR]: {e}")
+        query_plan = None
 
+    # Execute the generated query
     if query_plan:
         query_result_text, _ = run_mongo_query(query_plan, label="GPT-generated")
 
+    # Use GPT to convert query results into natural language answer
     try:
         reply, explain_tokens = _gpt_explain(
             openai_client, user_message, query_result_text, date_label, history
@@ -1902,6 +2292,13 @@ Format: {{"collection":"ppe_results","operation":"aggregate","pipeline":[...]}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI error: {e}")
 
+    # Save to semantic cache for future similar queries
+    save_semantic_cache(user_message, reply, date_from)
+
+    print(f"  [QUERY TOKENS]   : {query_tokens}")
+    print(f"  [EXPLAIN TOKENS] : {explain_tokens}")
+    print(f"  [TOTAL TOKENS]   : {query_tokens + explain_tokens}")
+    
     return {
         "reply":       reply,
         "tokens_used": query_tokens + explain_tokens,
@@ -1909,10 +2306,14 @@ Format: {{"collection":"ppe_results","operation":"aggregate","pipeline":[...]}}
         "date":        date_from,
     }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - PDF REPORTS
+# Generate downloadable PDF reports
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# REPORTS (PDF)
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Generate daily safety report as PDF
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/daily-safety")
 def report_daily_safety(date: str = None):
     try:
@@ -1924,17 +2325,21 @@ def report_daily_safety(date: str = None):
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    # Gather data for report
     kpi     = get_kpi(date)
     results = list(ppe_results_col.find(date_match(date)))
     buf     = io.BytesIO()
     c       = rl_canvas.Canvas(buf, pagesize=A4)
     w, h    = A4
 
+    # Report header
     c.setFont("Helvetica-Bold", 18)
     c.drawString(50, h - 60, "Daily Safety Report")
     c.setFont("Helvetica", 12)
     c.drawString(50, h - 85,  f"Date: {date}")
     c.drawString(50, h - 105, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # KPI summary section
     c.setFont("Helvetica-Bold", 13)
     c.drawString(50, h - 140, "KPI Summary")
     c.setFont("Helvetica", 11)
@@ -1951,6 +2356,7 @@ def report_daily_safety(date: str = None):
         c.drawString(60, y, f"{label}: {val}")
         y -= 18
 
+    # Violation details section
     c.setFont("Helvetica-Bold", 13)
     y -= 10
     c.drawString(50, y, "Violation Details")
@@ -1968,18 +2374,22 @@ def report_daily_safety(date: str = None):
             c.drawString(60, y, f"{ts}  |  {cam}  |  Worker {lbl}  |  {vt}")
             y -= 15
             count += 1
+            # Start new page if needed
             if y < 60:
                 c.showPage()
                 y = h - 60
                 c.setFont("Helvetica", 10)
     if count == 0:
         c.drawString(60, y, "No violations found for this date.")
+    
     c.save()
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=daily_safety_{date}.pdf"})
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Generate PPE compliance summary report as PDF
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/ppe-summary")
 def report_ppe_summary(date: str = None):
     try:
@@ -1991,16 +2401,20 @@ def report_ppe_summary(date: str = None):
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    # Gather compliance data
     compliance = get_ppe_compliance(date)
     zones      = get_ppe_compliance_by_zone(date)
     buf        = io.BytesIO()
     c          = rl_canvas.Canvas(buf, pagesize=A4)
     w, h       = A4
 
+    # Report header
     c.setFont("Helvetica-Bold", 18)
     c.drawString(50, h - 60, "Weekly PPE Summary")
     c.setFont("Helvetica", 12)
     c.drawString(50, h - 85, f"Date: {date}")
+    
+    # Overall compliance section
     c.setFont("Helvetica-Bold", 13)
     c.drawString(50, h - 120, "Overall Compliance")
     c.setFont("Helvetica", 11)
@@ -2017,6 +2431,7 @@ def report_ppe_summary(date: str = None):
         c.drawString(60, y, f"{label}: {val}")
         y -= 18
 
+    # Per-camera breakdown section
     c.setFont("Helvetica-Bold", 13)
     y -= 10
     c.drawString(50, y, "Per Camera Breakdown")
@@ -2027,6 +2442,7 @@ def report_ppe_summary(date: str = None):
             f"{z['camera']}  |  Total: {z['total']}  |  "
             f"No Helmet: {z['not_wearing_helmet']}  |  No Vest: {z['not_wearing_vest']}")
         y -= 15
+        # Start new page if needed
         if y < 60:
             c.showPage()
             y = h - 60
@@ -2035,7 +2451,9 @@ def report_ppe_summary(date: str = None):
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=ppe_summary_{date}.pdf"})
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Generate alerts/incidents report as PDF
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/alerts")
 def report_alerts(date: str = None):
     try:
@@ -2047,17 +2465,21 @@ def report_alerts(date: str = None):
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    # Gather alert data
     results    = list(ppe_results_col.find(date_match(date)).sort("analyzed_at_ist", DESCENDING))
     alert_list = build_alert_list(results)
     buf        = io.BytesIO()
     c          = rl_canvas.Canvas(buf, pagesize=A4)
     w, h       = A4
 
+    # Report header
     c.setFont("Helvetica-Bold", 18)
     c.drawString(50, h - 60, "Incident / Alert Report")
     c.setFont("Helvetica", 12)
     c.drawString(50, h - 85,  f"Date: {date}")
     c.drawString(50, h - 105, f"Total Alerts: {len(alert_list)}")
+    
+    # Table header
     c.setFont("Helvetica-Bold", 11)
     y = h - 135
     c.drawString(50,  y, "Time");  c.drawString(160, y, "Camera")
@@ -2065,6 +2487,8 @@ def report_alerts(date: str = None):
     y -= 5
     c.line(50, y, w - 50, y)
     y -= 15
+    
+    # Table rows
     c.setFont("Helvetica", 9)
     for a in alert_list:
         ts  = str(a.get("timestamp", ""))[:19]
@@ -2075,6 +2499,7 @@ def report_alerts(date: str = None):
         c.drawString(50, y, ts);  c.drawString(160, y, cam)
         c.drawString(270, y, wid); c.drawString(350, y, vt); c.drawString(470, y, ack)
         y -= 14
+        # Start new page if needed
         if y < 60:
             c.showPage(); y = h - 60; c.setFont("Helvetica", 9)
     if not alert_list:
@@ -2084,7 +2509,9 @@ def report_alerts(date: str = None):
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=alerts_{date}.pdf"})
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Generate weekly safety report as PDF (7-day summary)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/weekly-safety")
 def report_weekly_safety(date: str = None):
     try:
@@ -2093,6 +2520,7 @@ def report_weekly_safety(date: str = None):
     except ImportError:
         return Response(content="reportlab not installed.", status_code=500)
 
+    # Calculate date range (7 days ending on specified date)
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
     try:
@@ -2104,12 +2532,14 @@ def report_weekly_safety(date: str = None):
     start_str = start_dt.strftime("%Y-%m-%d")
     end_str   = end_dt.strftime("%Y-%m-%d")
 
+    # Fetch data for date range
     query = {"$or": [
         {"camera_ts_ist": {"$gte": start_str, "$lte": end_str + " 99"}},
         {"camera_ts":     {"$gte": start_str, "$lte": end_str + " 99"}},
     ]}
     results = list(ppe_results_col.find(query))
 
+    # Calculate daily statistics
     from collections import defaultdict
     day_stats = defaultdict(lambda: {
         "persons": 0, "violations": 0,
@@ -2131,6 +2561,7 @@ def report_weekly_safety(date: str = None):
             if vt in ("no_vest",   "both_missing"): day_stats[ts]["no_vest"]      += 1
             if vt == "both_missing":                day_stats[ts]["both_missing"] += 1
 
+    # Calculate summary metrics
     all_days         = [(start_dt + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
     total_persons    = sum(day_stats[d]["persons"]    for d in all_days)
     total_violations = sum(day_stats[d]["violations"] for d in all_days)
@@ -2140,6 +2571,7 @@ def report_weekly_safety(date: str = None):
     total_no_vest    = sum(day_stats[d]["no_vest"]   for d in all_days)
     worst_day        = max(all_days, key=lambda d: day_stats[d]["violations"]) if results else end_str
 
+    # Calculate per-camera statistics
     cam_stats = defaultdict(lambda: {"persons": 0, "no_helmet": 0, "no_vest": 0})
     for doc in results:
         ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
@@ -2153,10 +2585,12 @@ def report_weekly_safety(date: str = None):
             if vt in ("no_helmet", "both_missing"): cam_stats[cam]["no_helmet"] += 1
             if vt in ("no_vest",   "both_missing"): cam_stats[cam]["no_vest"]   += 1
 
+    # Generate PDF
     buf  = io.BytesIO()
     c    = rl_canvas.Canvas(buf, pagesize=A4)
     pw, ph = A4
 
+    # Helper function for section headers
     def section_header(y, text):
         c.setFillColorRGB(0.13, 0.13, 0.2)
         c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
@@ -2166,6 +2600,7 @@ def report_weekly_safety(date: str = None):
         c.setFillColorRGB(0, 0, 0)
         return y - 28
 
+    # Report header
     c.setFillColorRGB(0.05, 0.27, 0.53)
     c.rect(0, ph - 80, pw, 80, fill=1, stroke=0)
     c.setFillColorRGB(1, 1, 1)
@@ -2176,6 +2611,7 @@ def report_weekly_safety(date: str = None):
     c.setFillColorRGB(0, 0, 0)
     y = ph - 105
 
+    # Weekly KPI summary
     y = section_header(y, "WEEKLY KPI SUMMARY")
     c.setFont("Helvetica", 10)
     for label, val in [
@@ -2193,6 +2629,7 @@ def report_weekly_safety(date: str = None):
         y -= 16
     y -= 8
 
+    # Day-by-day breakdown
     y = section_header(y, "DAY-BY-DAY BREAKDOWN")
     c.setFont("Helvetica-Bold", 9)
     c.setFillColorRGB(0.9, 0.9, 0.9)
@@ -2210,10 +2647,12 @@ def report_weekly_safety(date: str = None):
         persons = s["persons"]; violations = s["violations"]
         nh      = s["no_helmet"]; nv = s["no_vest"]
         comp    = f"{round((persons - violations) / persons * 100, 1)}%" if persons else "N/A"
+        # Alternate row colors
         if i % 2 == 0:
             c.setFillColorRGB(0.96, 0.96, 0.98)
             c.rect(40, y - 3, pw - 80, 14, fill=1, stroke=0)
             c.setFillColorRGB(0, 0, 0)
+        # Highlight worst day in red
         if day == worst_day and violations > 0:
             c.setFillColorRGB(0.8, 0.1, 0.1)
         for col, val in zip(cols, [day, persons, violations, nh, nv, comp]):
@@ -2227,6 +2666,7 @@ def report_weekly_safety(date: str = None):
     if y < 120:
         c.showPage(); y = ph - 60
 
+    # Per-camera breakdown
     y = section_header(y, "PER-CAMERA WEEKLY BREAKDOWN")
     c.setFont("Helvetica-Bold", 9)
     c.setFillColorRGB(0.9, 0.9, 0.9)
@@ -2251,6 +2691,7 @@ def report_weekly_safety(date: str = None):
         if y < 80:
             c.showPage(); y = ph - 60; c.setFont("Helvetica", 9)
 
+    # Footer
     c.setFont("Helvetica", 8)
     c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(48, 30, f"YOLOIntel Safety Dashboard  |  {start_str} to {end_str}  |  {len(results)} frames analyzed")
@@ -2259,7 +2700,9 @@ def report_weekly_safety(date: str = None):
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=weekly_safety_{start_str}_to_{end_str}.pdf"})
 
-
+# ───────────────────────────────────────────────────────────────────────────
+# Generate monthly shift handover report as PDF (professional format)
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/reports/monthly-handover")
 def report_monthly_handover(month: str = None):
     try:
@@ -2268,6 +2711,7 @@ def report_monthly_handover(month: str = None):
     except ImportError:
         return Response(content="reportlab not installed.", status_code=500)
 
+    # Parse month and calculate date range
     if not month:
         month = datetime.now().strftime("%Y-%m")
     try:
@@ -2285,6 +2729,7 @@ def report_monthly_handover(month: str = None):
     end_str     = end_dt.strftime("%Y-%m-%d")
     month_label = month_dt.strftime("%B %Y")
 
+    # Fetch data for entire month
     query = {"$or": [
         {"camera_ts_ist": {"$gte": start_str, "$lte": end_str + " 99"}},
         {"camera_ts":     {"$gte": start_str, "$lte": end_str + " 99"}},
@@ -2292,6 +2737,7 @@ def report_monthly_handover(month: str = None):
     ]}
     results = list(ppe_results_col.find(query))
 
+    # Calculate daily peak values per camera
     from collections import defaultdict
     day_cam = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
     for doc in results:
@@ -2305,6 +2751,7 @@ def report_monthly_handover(month: str = None):
         if persons > slot["max_workers"]:    slot["max_workers"]    = persons
         if viols   > slot["max_violations"]: slot["max_violations"] = viols
 
+    # Get list of all days with data
     all_days = []
     d = start_dt
     while d <= end_dt:
@@ -2313,21 +2760,25 @@ def report_monthly_handover(month: str = None):
 
     days_with_data = [day for day in all_days if day in day_cam]
 
+    # Helper functions for daily totals
     def day_total_workers(day):
         return sum(c["max_workers"] for c in day_cam[day].values())
 
     def day_total_violations(day):
         return sum(c["max_violations"] for c in day_cam[day].values())
 
+    # Calculate summary metrics
     total_workers    = sum(day_total_workers(d)    for d in days_with_data)
     total_violations = sum(day_total_violations(d) for d in days_with_data)
     total_safe       = max(0, total_workers - total_violations)
     compliance_pct   = round((total_safe / total_workers * 100), 1) if total_workers else 100.0
 
+    # Generate professional PDF with dark theme
     buf    = io.BytesIO()
     c      = rl_canvas.Canvas(buf, pagesize=A4)
     pw, ph = A4
 
+    # Define color scheme
     BG_DARK = (0.07, 0.09, 0.13); BG_CARD = (0.11, 0.14, 0.20)
     GREEN   = (0.18, 0.80, 0.44); RED     = (0.90, 0.25, 0.25)
     YELLOW  = (0.95, 0.75, 0.10); WHITE   = (1.0,  1.0,  1.0)
@@ -2335,7 +2786,10 @@ def report_monthly_handover(month: str = None):
 
     def set_rgb(rgb): c.setFillColorRGB(*rgb)
 
+    # Background
     set_rgb(BG_DARK); c.rect(0, 0, pw, ph, fill=1, stroke=0)
+    
+    # Header section
     c.setFillColorRGB(0.05, 0.12, 0.25); c.rect(0, ph - 75, pw, 75, fill=1, stroke=0)
     set_rgb(WHITE); c.setFont("Helvetica-Bold", 18)
     c.drawString(40, ph - 38, "YOLOINTEL  ·  CONSTRUCTION SITE")
@@ -2349,6 +2803,7 @@ def report_monthly_handover(month: str = None):
     c.drawString(40, y, f"REPORT COVERS:  {month_label.upper()}   ·   DATA DAYS: {len(days_with_data)}")
     y -= 30
 
+    # KPI cards section
     card_w = (pw - 80 - 18) / 4; card_h = 110; gap = 6
     card_x = [40 + i * (card_w + gap) for i in range(4)]
     cards  = [
@@ -2372,6 +2827,7 @@ def report_monthly_handover(month: str = None):
         c.drawString(cx + 10, cy + 10, card["sub"])
     y -= card_h + 28
 
+    # Day-by-day breakdown table
     set_rgb((0.13, 0.16, 0.24)); c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
     set_rgb(WHITE); c.setFont("Helvetica-Bold", 10)
     c.drawString(48, y + 2, f"DAY-BY-DAY BREAKDOWN  —  {month_label.upper()}")
@@ -2405,6 +2861,7 @@ def report_monthly_handover(month: str = None):
     if y < 140:
         c.showPage(); set_rgb(BG_DARK); c.rect(0, 0, pw, ph, fill=1, stroke=0); y = ph - 40
 
+    # Handover notes section
     y -= 16
     set_rgb((0.13, 0.16, 0.24)); c.rect(40, y - 4, pw - 80, 20, fill=1, stroke=0)
     set_rgb(WHITE); c.setFont("Helvetica-Bold", 10); c.drawString(48, y + 2, "HANDOVER NOTES")
@@ -2419,6 +2876,8 @@ def report_monthly_handover(month: str = None):
     set_rgb(GREY); c.setFont("Helvetica", 9)
     for note in notes:
         c.drawString(52, y, f"•  {note}"); y -= 15
+    
+    # Signature section
     y -= 20
     set_rgb((0.25, 0.30, 0.42)); c.line(48, y, 230, y); c.line(320, y, 510, y)
     set_rgb(GREY); c.setFont("Helvetica", 8)
@@ -2427,6 +2886,7 @@ def report_monthly_handover(month: str = None):
     c.drawString(200, y - 12, "Time: ___________")
     c.drawString(460, y - 12, "Time: ___________")
 
+    # Footer
     set_rgb((0.05, 0.12, 0.25)); c.rect(0, 0, pw, 28, fill=1, stroke=0)
     set_rgb(GREY); c.setFont("Helvetica", 7.5)
     c.drawString(40, 10, "YOLOIntel  ·  Construction Site  ·  Auto-generated Shift Handover Report")
@@ -2436,16 +2896,22 @@ def report_monthly_handover(month: str = None):
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=Handover-Report-{month}.pdf"})
 
+# ═══════════════════════════════════════════════════════════════════════════
+# API ENDPOINTS - ALERTS FULL
+# Extended alert information
+# ═══════════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ALERTS FULL
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────
+# Get comprehensive alert data with date range support
+# ───────────────────────────────────────────────────────────────────────────
 @app.get("/api/alerts-full")
 def get_alerts_full(
     date_from: str = None, date_to: str = None,
     date: str = None, limit: int = 9999,
 ):
     today_str = datetime.now().strftime("%Y-%m-%d")
+    
+    # Build query based on provided date parameters
     if date_from and date_to:
         query = {"$or": [
             {"camera_ts_ist":   {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
@@ -2462,6 +2928,8 @@ def get_alerts_full(
         .sort("camera_ts_ist", DESCENDING)
         .limit(limit)
     )
+    
+    # Build detailed alert list with all metadata
     alerts = []
     for r in results:
         ts       = get_ts(r)
@@ -2501,19 +2969,23 @@ def get_alerts_full(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SSE LIVE STREAM
+# Streams real-time KPI and alert updates to the frontend via Server-Sent Events
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/stream")
 async def stream_updates(request: Request):
     async def event_generator():
         while True:
+            # Stop if client disconnected or server is shutting down
             if await request.is_disconnected():
                 break
             if _shutdown_event.is_set():
                 break
             try:
                 today_str  = datetime.now().strftime("%Y-%m-%d")
+                # Fetch latest KPI data for today
                 kpi_data   = get_kpi(today_str)
                 match_q    = date_match(today_str)
+                # Fetch only unacknowledged alerts, sorted by most recent
                 raw_alerts = list(
                     ppe_results_col.find(
                         date_and(match_q, {"$or": [
@@ -2525,6 +2997,7 @@ async def stream_updates(request: Request):
                     .limit(10)
                 )
                 open_alerts = build_alert_list(raw_alerts)
+                # Build SSE payload
                 payload     = {
                     "kpi":            kpi_data,
                     "latest_alerts":  open_alerts[:10],
@@ -2534,6 +3007,7 @@ async def stream_updates(request: Request):
                 yield f"data: {json.dumps(payload)}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            # Wait 3 seconds before next push, or exit if shutdown triggered
             try:
                 await asyncio.wait_for(asyncio.shield(_shutdown_event.wait()), timeout=3.0)
                 break
@@ -2549,6 +3023,8 @@ async def stream_updates(request: Request):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # KPI PERIOD
+# Returns aggregated KPI metrics for a custom date range (date_from to date_to)
+# Uses peak-per-day-per-camera methodology to avoid double counting
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/kpi-period")
 def get_kpi_period(date_from: str, date_to: str):
@@ -2556,6 +3032,7 @@ def get_kpi_period(date_from: str, date_to: str):
     if not date_from or not date_to:
         return {"error": "date_from and date_to are required"}
 
+    # Query documents within the date range across timestamp fields
     query = {"$or": [
         {"camera_ts_ist": {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
         {"camera_ts":     {"$gte": date_from, "$lte": date_to + " 99:99:99"}},
@@ -2568,6 +3045,7 @@ def get_kpi_period(date_from: str, date_to: str):
             "active_cameras": 0, "days_with_data": 0,
         }
 
+    # Track peak workers and violations per day per camera
     day_cam = defaultdict(lambda: defaultdict(lambda: {"max_workers": 0, "max_violations": 0}))
     for doc in results:
         ts = str(doc.get("camera_ts_ist") or doc.get("camera_ts") or "")[:10]
@@ -2580,6 +3058,7 @@ def get_kpi_period(date_from: str, date_to: str):
         if persons > slot["max_workers"]:    slot["max_workers"]    = persons
         if viols   > slot["max_violations"]: slot["max_violations"] = viols
 
+    # Sum peak values across all days and cameras
     total_workers = total_violations = 0
     for day, cameras in day_cam.items():
         total_workers    += sum(c["max_workers"]    for c in cameras.values())
@@ -2588,6 +3067,7 @@ def get_kpi_period(date_from: str, date_to: str):
     total_safe     = max(0, total_workers - total_violations)
     compliance_pct = round((total_safe / total_workers * 100), 1) if total_workers > 0 else 100.0
 
+    # Count critical vs warning violations across the period
     critical_count = warning_count = 0
     for doc in results:
         for p in doc.get("ppe", []):
@@ -2595,6 +3075,7 @@ def get_kpi_period(date_from: str, date_to: str):
             if vt == "both_missing":             critical_count += 1
             elif vt in ("no_helmet", "no_vest"): warning_count  += 1
 
+    # Count distinct active cameras in the period
     active_cameras = len(set(doc.get("camera", "") for doc in results if doc.get("camera")))
 
     return {
@@ -2613,12 +3094,14 @@ def get_kpi_period(date_from: str, date_to: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
+# Application startup: launches FFmpeg streams, opens browser, starts Uvicorn
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn, webbrowser
 
     loop = asyncio.new_event_loop()
 
+    # Handle Ctrl+C and SIGTERM for graceful shutdown
     def _signal_handler(sig, frame):
         print("\n[YOLOIntel] Shutting down...")
         loop.call_soon_threadsafe(_shutdown_event.set)
@@ -2630,10 +3113,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _signal_handler)
 
     import atexit
+    # Start FFmpeg stream for each configured camera
     for cam_id, rtsp_url in CAMERAS.items():
         start_ffmpeg(cam_id, rtsp_url)
+    # Ensure all streams are stopped on exit
     atexit.register(stop_all_streams)
 
+    # Open browser after short delay to allow server to start
     threading.Thread(
         target=lambda: (time.sleep(1.5), webbrowser.open("http://localhost:5173")),
         daemon=True,

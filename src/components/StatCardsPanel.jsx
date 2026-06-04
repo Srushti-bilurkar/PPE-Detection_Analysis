@@ -60,14 +60,16 @@ function getAllCamerasForLocation(location) {
   return []
 }
 
-// ─── Get unique db_ids for a location (deduped) ───────────────────────────────
+// ─── FIX: Get unique db_ids — resolves cam.db_id → cam.name → cam.id ──────────
+// cam.name holds the actual MongoDB camera name (e.g. 'Pier_Cap_Cam_16389')
+// cam.id holds the UI id (e.g. 'CAM-A01') which does NOT exist in MongoDB
 function getUniqueDbIdsForLocation(location) {
   if (!location) return []
   const cameras = getAllCamerasForLocation(location)
   const seen = new Set()
   const unique = []
   for (const cam of cameras) {
-    const dbId = cam.db_id || cam.id
+    const dbId = cam.db_id || cam.name || cam.id   // ← cam.name is the MongoDB key
     if (dbId && !seen.has(dbId)) {
       seen.add(dbId)
       unique.push(dbId)
@@ -284,7 +286,7 @@ function CardChartModal({ card, data, onClose }) {
 }
 
 // ─── Detail panel content per card ───────────────────────────────────────────
-function DetailContent({ cardId, data, theme = 'dark' }) { 
+function DetailContent({ cardId, data, theme = 'dark' }) {
   const {
     todaySafe, todayViols, displayViolated, maxViolations, maxVHour, compliance,
     displaySafe, displayCompliance, cameraSafe, trendData, derivedSafe,
@@ -329,8 +331,8 @@ function DetailContent({ cardId, data, theme = 'dark' }) {
               CAMERA BREAKDOWN · {selectedLocation.label}
             </div>
             {locationCameraKpis.map(({ camera, kpi }) => (
-              <div key={camera.db_id || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
-                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.id}</span>
+              <div key={camera.db_id || camera.name || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
+                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.name || camera.id}</span>
                 <span style={{ color: '#22c984', fontWeight: 700 }}>{kpi ? kpi.total_safe : '—'} safe</span>
               </div>
             ))}
@@ -369,8 +371,8 @@ function DetailContent({ cardId, data, theme = 'dark' }) {
               CAMERA BREAKDOWN · {selectedLocation.label}
             </div>
             {locationCameraKpis.map(({ camera, kpi }) => (
-              <div key={camera.db_id || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
-                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.id}</span>
+              <div key={camera.db_id || camera.name || camera.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6, padding: '5px 8px', background: T.rowBg, borderRadius: 5 }}>
+                <span style={{ color: T.subtext }}>📷 {camera.db_id || camera.name || camera.id}</span>
                 <span style={{ color: '#ef4444', fontWeight: 700 }}>{kpi ? kpi.total_violations : '—'} violations</span>
               </div>
             ))}
@@ -444,7 +446,7 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
   const hasAlerts  = visibleAlerts.length > 0
   const now        = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const scopeLabel = selectedLocation?.label || selectedCamera?.id || null
- 
+
   const HOURS = (trendData || []).map(d => {
     const [hStr] = (d.hour?.slice(0, 5) ?? '').split(':')
     const h = parseInt(hStr, 10)
@@ -462,7 +464,7 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
     if (r < 0.75) return 'rgba(239,68,68,0.65)'
     return '#ef4444'
   }
- 
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexShrink: 0 }}>
@@ -535,37 +537,28 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
   )
 }
 
-
 // ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, isActive, compact,
-  // scoped (location/camera-aware) values — already resolved by parent
+function StatCard({
+  icon, label, subtitle, value, color, sub, cardId, onClick, isActive, compact,
   scopedSafe, scopedRisk, scopedTotal,
   scopedCompliance, scopedHelmet, scopedVest, scopedBothPpe,
   scopedViolations, scopedPeakTime, scopedTopCamera,
-  // Card 4 trend values
   safetyImprovementPct, helmetDelta, vestDelta,
-  // Card 1 extras
   activeCameras, currentShift,
-  // Card 3 extras
   topViolationType,
-  // Card 1 live streaming
   isStreaming, onLiveRefresh, liveRefreshing, liveLastUpdated,
-  // NEW: auto-refresh countdown for card 1
   autoRefreshCountdown,
-  // Theme
   theme = 'dark',
 }) {
   const [hover, setHover] = useState(false)
   const isDark = theme === 'dark'
 
-  // ── FIXED: Proper light/dark theme tokens ─────────────────────────────────
   const T = {
     cardBg:       isDark ? '#0d1828'                      : '#ffffff',
     cardBgHover:  isDark ? '#131d2e'                      : '#f8fafc',
     cardBgActive: isDark ? '#0f1f30'                      : '#f0f9ff',
     border:       isDark ? 'rgba(255,255,255,0.06)'       : 'rgba(0,0,0,0.10)',
     borderHover:  isDark ? 'rgba(255,255,255,0.13)'       : 'rgba(0,0,0,0.20)',
-    // ── text tokens — dark bg needs light text; light bg needs dark text ──
     text:         isDark ? '#e2e8f0'                      : '#0f172a',
     muted:        isDark ? '#94a3b8'                      : '#475569',
     subtext:      isDark ? '#cbd5e1'                      : '#334155',
@@ -575,14 +568,11 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
     hint:         isDark ? '#475569'                      : '#94a3b8',
     labelBg:      isDark ? `${color}22`                   : `${color}18`,
     labelBorder:  isDark ? `${color}44`                   : `${color}55`,
-    // Row label text — must be readable on both bg colors
     rowLabel:     isDark ? '#94a3b8'                      : '#374151',
-    // Auto-refresh bar bg
     refreshBarBg: isDark ? 'rgba(255,255,255,0.04)'       : 'rgba(0,0,0,0.06)',
     refreshFill:  '#22c984',
   }
 
-  // ── Per-card inline row data ───────────────────────────────────────────────
   const renderRows = () => {
     const rowStyle = {
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -602,7 +592,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
       const safeLabel = total !== '—' ? `${safe} / ${total}` : `${safe}`
       return (
         <>
-          {/* ── FIXED: Live streaming indicator with auto-refresh countdown ── */}
           {isStreaming && (
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -616,15 +605,12 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
                   display: 'inline-block', flexShrink: 0,
                   animation: 'pulse 1.4s ease-in-out infinite',
                 }} />
-                <span style={{ fontSize: 9, color: '#22c984', fontWeight: 700, letterSpacing: '0.08em' }}>
-                  LIVE
-                </span>
+                <span style={{ fontSize: 9, color: '#22c984', fontWeight: 700, letterSpacing: '0.08em' }}>LIVE</span>
                 {liveLastUpdated && (
                   <span style={{ fontSize: 9, color: T.muted, marginLeft: 4 }}>
                     {liveLastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
                 )}
-                {/* Auto-refresh countdown badge */}
                 {autoRefreshCountdown != null && (
                   <span style={{
                     fontSize: 9, color: '#22c984', marginLeft: 6,
@@ -638,7 +624,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
               <button
                 onClick={e => { e.stopPropagation(); onLiveRefresh?.() }}
                 disabled={liveRefreshing}
-                title="Refresh live data"
                 style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   background: liveRefreshing ? 'rgba(34,201,132,0.05)' : 'rgba(34,201,132,0.12)',
@@ -661,20 +646,14 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
             </div>
           )}
 
-          {/* ── FIXED: Auto-refresh progress bar (10s cycle) ── */}
           {isStreaming && autoRefreshCountdown != null && (
             <div style={{ marginBottom: 8 }}>
-              <div style={{
-                height: 3, borderRadius: 2,
-                background: T.refreshBarBg,
-                overflow: 'hidden',
-              }}>
+              <div style={{ height: 3, borderRadius: 2, background: T.refreshBarBg, overflow: 'hidden' }}>
                 <div style={{
                   height: '100%',
                   width: `${((10 - autoRefreshCountdown) / 10) * 100}%`,
                   background: 'linear-gradient(90deg, #22c984, #4ade80)',
-                  borderRadius: 2,
-                  transition: 'width 1s linear',
+                  borderRadius: 2, transition: 'width 1s linear',
                 }} />
               </div>
               <div style={{ fontSize: 8, color: T.muted, marginTop: 2, textAlign: 'right' }}>
@@ -685,7 +664,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
 
           <div style={rowStyle}><span style={lbl}>Workers Safe On-Site</span><span style={val('#22c984')}>{safeLabel}</span></div>
           <div style={rowStyle}><span style={lbl}>Workers Currently at Risk</span><span style={val('#ef4444')}>{risk}</span></div>
-          {/* ── FIXED: Always show all 4 cameras when streaming ── */}
           <div style={rowStyle}><span style={lbl}>Active Cameras</span><span style={val('#38bdf8')}>{cams}</span></div>
           <div style={{ ...rowStyle, borderBottom: 'none' }}><span style={lbl}>Current Shift</span><span style={val('#f59e0b')}>{shift}</span></div>
         </>
@@ -694,7 +672,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
 
     // ── CARD 2: PPE COMPLIANCE ────────────────────────────────────────────────
     if (cardId === 'compliance') {
-      // ── FIXED: Show actual values, never force 0% — fall back gracefully ──
       const overall = scopedCompliance != null ? `${scopedCompliance}%` : '—'
       const helmet  = scopedHelmet     != null ? `${scopedHelmet}%`     : '—'
       const vest    = scopedVest       != null ? `${scopedVest}%`       : '—'
@@ -711,7 +688,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
 
     // ── CARD 3: RISK HOTSPOT ──────────────────────────────────────────────────
     if (cardId === 'violations') {
-      // ── FIXED: topCamId now comes from cameraSafe sorted by violation_count desc ──
       const topCamId  = scopedTopCamera   ?? '—'
       const topCamLoc = topCamId !== '—' ? (DB_ID_TO_LOCATION[topCamId] ?? null) : null
       const peakTime  = scopedPeakTime    ?? '—'
@@ -782,7 +758,6 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        // ── FIXED: proper bg/border for light vs dark ──
         background:    isActive ? T.cardBgActive : hover ? T.cardBgHover : T.cardBg,
         border:        `1px solid ${isActive ? color : hover ? T.borderHover : T.border}`,
         borderLeft:    `3px solid ${color || '#5a6a82'}`,
@@ -800,26 +775,22 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
         flexDirection: 'column',
       }}
     >
-      {/* Card header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{
-          background:    T.labelBg,
-          border:        `1px solid ${T.labelBorder}`,
-          borderRadius:  6, padding: '3px 7px', fontSize: 10,
-          color,         fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
+          background:   T.labelBg,
+          border:       `1px solid ${T.labelBorder}`,
+          borderRadius: 6, padding: '3px 7px', fontSize: 10,
+          color,        fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
         }}>
           {label}
         </span>
       </div>
-      {/* Subtitle — FIXED: use T.text so it's dark on light bg, light on dark bg */}
       <div style={{ fontSize: compact ? 11 : 12, fontWeight: 700, color: T.text, marginBottom: 10, lineHeight: 1.3 }}>
         {subtitle}
       </div>
-      {/* Rows */}
       <div style={{ flex: 1 }}>
         {renderRows()}
       </div>
-      {/* click-for-chart hint — only for cards that open a modal */}
       {cardId !== 'ppe_violations' && (
         <div style={{ marginTop: 8, fontSize: 9, color: T.hint, textAlign: 'right', letterSpacing: '0.05em' }}>
           click for trend ↗
@@ -831,13 +802,13 @@ function StatCard({ icon, label, subtitle, value, color, sub, cardId, onClick, i
 
 // ─── CARDS CONFIG ─────────────────────────────────────────────────────────────
 const CARDS = [
-  { id: 'workers',        icon: '🟢', label: 'LIVE STATUS',       subtitle: 'Live Workforce Safety',  colorKey: '#22c984' },
-  { id: 'compliance',     icon: '🦺', label: 'PPE COMPLIANCE',    subtitle: 'PPE Compliance Summary', colorKey: '#f59e0b' },
-  { id: 'violations',     icon: '📍', label: 'RISK HOTSPOT',      subtitle: 'Risk Hotspot',           colorKey: '#ef4444' },
-  { id: 'ppe_violations', icon: '📈', label: 'SAFETY TREND',      subtitle: 'Safety Trend & Insights',colorKey: '#22c984' },
+  { id: 'workers',        icon: '🟢', label: 'WORKFORCE SAFETY',  subtitle: 'Workforce Safety',        colorKey: '#22c984' },
+  { id: 'compliance',     icon: '🦺', label: 'PPE COMPLIANCE',    subtitle: 'PPE Compliance Summary',  colorKey: '#f59e0b' },
+  { id: 'violations',     icon: '📍', label: 'RISK HOTSPOT',      subtitle: 'Risk Hotspot',            colorKey: '#ef4444' },
+  { id: 'ppe_violations', icon: '📈', label: 'SAFETY TREND',      subtitle: 'Safety Trend & Insights', colorKey: '#22c984' },
 ]
 
-// ── FIXED: DB_ID_TO_LOCATION maps camera db_id → human location label ─────────
+// ── DB_ID_TO_LOCATION: MongoDB camera name → human location label ──────────────
 const DB_ID_TO_LOCATION = {
   'Pier_Cap_Cam_16389': 'Bangalore',
   'Pier_Cap_Cam_16388': 'Hyderabad',
@@ -845,11 +816,8 @@ const DB_ID_TO_LOCATION = {
   'Pier_Cap_Cam_16386': 'Chennai · Location 2',
 }
 
-// All known cameras (used for streaming active camera count)
-const ALL_KNOWN_CAMERAS = Object.keys(DB_ID_TO_LOCATION)
-const TOTAL_CAMERA_COUNT = ALL_KNOWN_CAMERAS.length // always 4
-
-const getCityLabel = (cameraId) => DB_ID_TO_LOCATION[cameraId] || cameraId
+const ALL_KNOWN_CAMERAS  = Object.keys(DB_ID_TO_LOCATION)
+const TOTAL_CAMERA_COUNT = ALL_KNOWN_CAMERAS.length
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function StatCardsPanel({
@@ -858,12 +826,11 @@ export default function StatCardsPanel({
   shiftSafe, cameraSafe, trendData, visibleAlerts, ackAlert, selectedDate,
   selectedCamera, onClearCamera,
   selectedLocation, onClearLocation,
-  // NEW optional props for card 3 & 4 enrichment
-  compliancePrevDay,   // { helmet, vest, overall } — yesterday's compliance values
-  repeatViolators,     // number — workers who violated on multiple shifts/days
-  isStreaming,         // boolean — true when live stream is active
-  onRefreshLive,       // () => void — callback to re-fetch live data for card 1
-  theme = 'dark',      // 'dark' | 'light' — controls card color scheme
+  compliancePrevDay,
+  repeatViolators,
+  isStreaming,
+  onRefreshLive,
+  theme = 'dark',
 }) {
   const [activeModal,        setActiveModal]        = useState(null)
   const [alertsOpen,         setAlertsOpen]         = useState(false)
@@ -876,21 +843,17 @@ export default function StatCardsPanel({
   const [liveRefreshing,     setLiveRefreshing]     = useState(false)
   const [liveLastUpdated,    setLiveLastUpdated]    = useState(null)
   const [prevDayKpi,         setPrevDayKpi]         = useState(null)
-  // ── NEW: auto-refresh countdown (10 seconds) ──────────────────────────────
   const [autoRefreshCountdown, setAutoRefreshCountdown] = useState(10)
   const autoRefreshTimerRef = useRef(null)
   const autoRefreshCountRef = useRef(10)
-
   const cardsRowRef = useRef(null)
   const [cardsHeight, setCardsHeight] = useState(null)
 
   const alertCount = visibleAlerts?.length ?? 0
 
-  // ── FIXED: Auto-refresh every 10 seconds when streaming is active ──────────
   const handleLiveRefresh = useCallback(async () => {
     if (liveRefreshing) return
     setLiveRefreshing(true)
-    // Reset countdown
     autoRefreshCountRef.current = 10
     setAutoRefreshCountdown(10)
     try {
@@ -901,38 +864,31 @@ export default function StatCardsPanel({
     }
   }, [liveRefreshing, onRefreshLive])
 
-  // ── Auto-refresh interval + countdown tick ─────────────────────────────────
   useEffect(() => {
     if (!isStreaming) {
       if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current)
       return
     }
-    // Reset on mount/streaming start
     autoRefreshCountRef.current = 10
     setAutoRefreshCountdown(10)
-
     autoRefreshTimerRef.current = setInterval(() => {
       autoRefreshCountRef.current -= 1
       setAutoRefreshCountdown(autoRefreshCountRef.current)
       if (autoRefreshCountRef.current <= 0) {
         autoRefreshCountRef.current = 10
         setAutoRefreshCountdown(10)
-        // Fire refresh (non-blocking)
         if (typeof onRefreshLive === 'function') {
           setLiveRefreshing(true)
-          Promise.resolve(onRefreshLive())
-            .finally(() => {
-              setLiveRefreshing(false)
-              setLiveLastUpdated(new Date())
-            })
+          Promise.resolve(onRefreshLive()).finally(() => {
+            setLiveRefreshing(false)
+            setLiveLastUpdated(new Date())
+          })
         }
       }
     }, 1000)
-
     return () => { if (autoRefreshTimerRef.current) clearInterval(autoRefreshTimerRef.current) }
   }, [isStreaming, onRefreshLive])
 
-  // ── Measure card row height ────────────────────────────────────────────────
   useEffect(() => {
     const measure = () => {
       if (cardsRowRef.current) setCardsHeight(cardsRowRef.current.offsetHeight)
@@ -949,11 +905,12 @@ export default function StatCardsPanel({
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // ── Fetch per-camera KPI when a single camera is selected ──────────────────
+  // ── FIX: Fetch per-camera KPI — resolve MongoDB name via db_id → name → id ──
   useEffect(() => {
     if (!selectedDate || selectedLocation) return
     setCamKpi(null)
-    const realId = selectedCamera?.db_id || selectedCamera?.id
+    // FIX: use db_id first, then name (MongoDB camera name), then fallback to id
+    const realId = selectedCamera?.db_id || selectedCamera?.name || selectedCamera?.id
     if (!realId) return
     fetch(`/api/kpi?date=${selectedDate}&camera=${encodeURIComponent(realId)}`)
       .then(r => r.ok ? r.json() : null)
@@ -961,7 +918,8 @@ export default function StatCardsPanel({
       .catch(() => setCamKpi(null))
   }, [selectedDate, selectedCamera, selectedLocation])
 
-  // ── Fetch & aggregate KPIs for a selected location (deduped by db_id) ──────
+  // ── FIX: Fetch & aggregate KPIs for a selected location ──────────────────────
+  // Uses getUniqueDbIdsForLocation which now correctly falls back to cam.name
   useEffect(() => {
     if (!selectedDate || !selectedLocation) {
       setLocationKpi(null)
@@ -969,7 +927,7 @@ export default function StatCardsPanel({
       return
     }
     const allCameras  = getAllCamerasForLocation(selectedLocation)
-    const uniqueDbIds = getUniqueDbIdsForLocation(selectedLocation)
+    const uniqueDbIds = getUniqueDbIdsForLocation(selectedLocation)  // ← now uses cam.name
     if (!uniqueDbIds.length) {
       setLocationKpi(null)
       setLocationCameraKpis([])
@@ -986,16 +944,20 @@ export default function StatCardsPanel({
           .then(kpi => ({ dbId, kpi }))
       )
     ).then(results => {
-      const kpiByDbId = {}
-      results.forEach(({ dbId, kpi }) => { kpiByDbId[dbId] = kpi })
-      const cameraKpis = uniqueDbIds.map(dbId => ({
-        camera: allCameras.find(c => (c.db_id || c.id) === dbId) || { id: dbId, db_id: dbId },
-        kpi:    kpiByDbId[dbId] ?? null,
-      }))
-      setLocationCameraKpis(cameraKpis)
-      setLocationKpi(aggregateKpis(cameraKpis.map(r => r.kpi)))
-      setLocationKpiLoading(false)
-    })
+  const kpiByDbId = {}
+  results.forEach(({ dbId, kpi }) => { kpiByDbId[dbId] = kpi })
+
+  // Display: all UI cameras with their mapped kpi (20 rows for HYD, 1 for BLR, etc.)
+  const cameraKpis = allCameras.map(cam => ({
+    camera: cam,
+    kpi: kpiByDbId[cam.db_id || cam.name || cam.id] ?? null,
+  }))
+
+  // Aggregate: only unique db_ids so HYD doesn't count 20x
+  setLocationCameraKpis(cameraKpis)
+  setLocationKpi(aggregateKpis(uniqueDbIds.map(dbId => kpiByDbId[dbId] ?? null)))
+  setLocationKpiLoading(false)
+})
   }, [selectedDate, selectedLocation])
 
   // ── Fetch global KPI (no filter) ───────────────────────────────────────────
@@ -1015,7 +977,8 @@ export default function StatCardsPanel({
       d.setDate(d.getDate() - 1)
       return d.toISOString().split('T')[0]
     })()
-    const camId = selectedCamera?.db_id || selectedCamera?.id
+    // FIX: resolve MongoDB camera name for prev-day fetch too
+    const camId = selectedCamera?.db_id || selectedCamera?.name || selectedCamera?.id
     const url   = camId
       ? `/api/kpi?date=${prevDate}&camera=${encodeURIComponent(camId)}`
       : `/api/kpi?date=${prevDate}`
@@ -1029,8 +992,9 @@ export default function StatCardsPanel({
   useEffect(() => {
     if (!selectedDate || selectedLocation) return
     setDerivedSafe(null)
-    const realId   = selectedCamera?.db_id || selectedCamera?.id || ''
-    const camParam = realId ? `&camera=${realId}` : ''
+    // FIX: resolve MongoDB camera name
+    const realId   = selectedCamera?.db_id || selectedCamera?.name || selectedCamera?.id || ''
+    const camParam = realId ? `&camera=${encodeURIComponent(realId)}` : ''
     fetch(`/api/hourly-trend?date=${selectedDate}&shift=both${camParam}`)
       .then(r => r.ok ? r.json() : [])
       .then(arr => setDerivedSafe(Array.isArray(arr) ? arr.reduce((s, d) => s + (d.workers_active || 0), 0) : 0))
@@ -1057,14 +1021,14 @@ export default function StatCardsPanel({
       return displayViolated
     }
     if (id === 'compliance') {
-      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${locationKpi.compliance_pct}%`              : '—'
-      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${camKpi.compliance_pct}%`                   : '—'
+      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${locationKpi.compliance_pct}%`   : '—'
+      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${camKpi.compliance_pct}%`        : '—'
       if (globalKpi?.compliance_pct       != null)                             return `${globalKpi.compliance_pct}%`
       return displayCompliance !== null ? `${displayCompliance}%` : '—'
     }
     if (id === 'ppe_violations') {
-      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${100 - locationKpi.compliance_pct}%`         : '—'
-      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${100 - camKpi.compliance_pct}%`              : '—'
+      if (selectedLocation && locationKpi) return locationKpi.compliance_pct   != null ? `${100 - locationKpi.compliance_pct}%`  : '—'
+      if (selectedCamera   && camKpi)      return camKpi.compliance_pct        != null ? `${100 - camKpi.compliance_pct}%`       : '—'
       if (globalKpi?.compliance_pct       != null)                             return `${(100 - globalKpi.compliance_pct).toFixed(1)}%`
       return displayCompliance !== null ? `${100 - displayCompliance}%` : '—'
     }
@@ -1077,29 +1041,16 @@ export default function StatCardsPanel({
   const shiftIcon      = s => s === 'morning' ? '🌅' : s === 'afternoon' ? '☀️' : '🌙'
   const shiftName      = s => s === 'morning' ? 'Morning' : s === 'afternoon' ? 'Day' : 'Night'
 
-  // ── Peak safe hour ─────────────────────────────────────────────────────────
   const maxSafeVal = trendData ? Math.max(...trendData.map(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0))), 0) : 0
   const maxSHour   = trendData ? (trendData.find(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal)?.hour || '--') : '--'
 
-  // ── 7-day trend helpers ────────────────────────────────────────────────────
   const yesterday        = safeWorkers7day?.slice(-2)?.[0]
   const today7           = safeWorkers7day?.slice(-1)?.[0]
   const trendVsYesterday = (yesterday && today7) ? today7.safe_count - yesterday.safe_count : null
   const violTrend        = (yesterday && today7) ? today7.violations - yesterday.violations  : null
 
-  // ── Top / worst camera derived from cameraSafe ─────────────────────────────
-  const topSafeEntry = cameraSafe?.length ? [...cameraSafe].sort((a, b) => b.safe_count - a.safe_count)[0] : null
   const topViolEntry = cameraSafe?.length ? [...cameraSafe].sort((a, b) => a.safe_count - b.safe_count)[0] : null
-  const topSafeCity  = topSafeEntry ?? null
-  const topViolCity  = topViolEntry ?? null
 
-  // ── Peak values ───────────────────────────────────────────────────────────
-  const peakSafeHourEntry = trendData?.find(d => Math.max(0, (d.workers_active || 0) - (d.violations || 0)) === maxSafeVal)
-  const peakSafeCount     = peakSafeHourEntry ? Math.max(0, (peakSafeHourEntry.workers_active || 0) - (peakSafeHourEntry.violations || 0)) : null
-  const peakViolHourEntry = trendData?.find(d => d.hour === maxVHour)
-  const peakViolCount     = peakViolHourEntry ? (peakViolHourEntry.violations || 0) : null
-
-  // ── vs-prev-day label helpers ──────────────────────────────────────────────
   const fmtDiff = (val, isGoodWhenPositive = true) => {
     if (val === null || val === undefined) return null
     const abs   = Math.abs(val)
@@ -1110,7 +1061,6 @@ export default function StatCardsPanel({
     return { label, color }
   }
 
-  // ── Compliance day-over-day deltas ─────────────────────────────────────────
   const prevDaySource = compliancePrevDay ?? (prevDayKpi ? {
     helmet:  prevDayKpi.helmet_compliance  ?? prevDayKpi.compliance?.helmet  ?? null,
     vest:    prevDayKpi.vest_compliance    ?? prevDayKpi.compliance?.vest    ?? null,
@@ -1127,16 +1077,10 @@ export default function StatCardsPanel({
   const vestDelta    = (vestPrev    !== null) ? Math.round(vestToday    - vestPrev)    : null
   const overallDelta = (overallPrev !== null && overallToday !== null) ? Math.round(overallToday - overallPrev) : null
 
-  // ── Both PPE ───────────────────────────────────────────────────────────────
-  const bothPpePct = Math.min(helmetToday, vestToday)
-
-  // ── Safety improvement for card 4 ─────────────────────────────────────────
+  const bothPpePct           = Math.min(helmetToday, vestToday)
   const safetyImprovementPct = overallDelta !== null ? overallDelta : null
-
-  // ── Repeat violators ──────────────────────────────────────────────────────
   const repeatViolatorsCount = repeatViolators ?? 0
 
-  // ── Card sub content ───────────────────────────────────────────────────────
   const getCardSub = id => {
     const scope   = selectedLocation?.label || selectedCamera?.name || selectedCamera?.id || null
     const loading = isKpiLoading
@@ -1166,9 +1110,7 @@ export default function StatCardsPanel({
             <span style={{ color: textColor, fontWeight: 700 }}>{bestShiftCount}</span>
             <span style={{ color: mutedColor }}> safe</span>
           </span>
-          {diff && (
-            <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
-          )}
+          {diff && <span style={{ ...s9, color: diff.color }}>{diff.label}</span>}
         </div>
       )
     }
@@ -1184,9 +1126,7 @@ export default function StatCardsPanel({
             🦺 No Vest:{' '}
             <span style={{ color: '#f59e0b', fontWeight: 600 }}>{Math.round(100 - (compliance?.vest || 0))}%</span>
           </span>
-          {diff && (
-            <span style={{ ...s9, color: diff.color }}>{diff.label}</span>
-          )}
+          {diff && <span style={{ ...s9, color: diff.color }}>{diff.label}</span>}
         </div>
       )
     }
@@ -1194,24 +1134,12 @@ export default function StatCardsPanel({
     if (id === 'compliance') {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={s9}>
-            Overall PPE Compliance:{' '}
-            <span style={{ color: '#f59e0b', fontWeight: 600 }}>
-              {overallToday !== null ? `${overallToday}%` : '—'}
-            </span>
+          <span style={s9}>Overall PPE Compliance:{' '}
+            <span style={{ color: '#f59e0b', fontWeight: 600 }}>{overallToday !== null ? `${overallToday}%` : '—'}</span>
           </span>
-          <span style={s9}>
-            ⛑️ Helmet:{' '}
-            <span style={{ color: '#4ade80', fontWeight: 600 }}>{helmetToday}%</span>
-          </span>
-          <span style={s9}>
-            🦺 Vest:{' '}
-            <span style={{ color: '#4ade80', fontWeight: 600 }}>{vestToday}%</span>
-          </span>
-          <span style={s9}>
-            🔵 Both PPE:{' '}
-            <span style={{ color: '#38bdf8', fontWeight: 600 }}>{bothPpePct}%</span>
-          </span>
+          <span style={s9}>⛑️ Helmet: <span style={{ color: '#4ade80', fontWeight: 600 }}>{helmetToday}%</span></span>
+          <span style={s9}>🦺 Vest: <span style={{ color: '#4ade80', fontWeight: 600 }}>{vestToday}%</span></span>
+          <span style={s9}>🔵 Both PPE: <span style={{ color: '#38bdf8', fontWeight: 600 }}>{bothPpePct}%</span></span>
         </div>
       )
     }
@@ -1222,7 +1150,6 @@ export default function StatCardsPanel({
         : safetyImprovementPct < 0 ? '#ef4444'
         : '#64748b'
       const safetyArrow = safetyImprovementPct === null ? '' : safetyImprovementPct > 0 ? '↑' : safetyImprovementPct < 0 ? '↓' : '→'
-
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <span style={{ ...s9, color: safetyColor, fontWeight: 600 }}>
@@ -1231,34 +1158,24 @@ export default function StatCardsPanel({
               : 'Safety Improvement: — vs Yesterday'
             }
           </span>
-          <span style={s9}>
-            ⛑️ Helmet Change:{' '}
+          <span style={s9}>⛑️ Helmet Change:{' '}
             {helmetDelta !== null
-              ? <span style={{ color: helmetDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>
-                  {helmetDelta >= 0 ? '+' : ''}{helmetDelta}%
-                </span>
+              ? <span style={{ color: helmetDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>{helmetDelta >= 0 ? '+' : ''}{helmetDelta}%</span>
               : <span style={{ color: '#64748b' }}>—</span>
             }
           </span>
-          <span style={s9}>
-            🦺 Vest Change:{' '}
+          <span style={s9}>🦺 Vest Change:{' '}
             {vestDelta !== null
-              ? <span style={{ color: vestDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>
-                  {vestDelta >= 0 ? '+' : ''}{vestDelta}%
-                </span>
+              ? <span style={{ color: vestDelta >= 0 ? '#22c984' : '#ef4444', fontWeight: 600 }}>{vestDelta >= 0 ? '+' : ''}{vestDelta}%</span>
               : <span style={{ color: '#64748b' }}>—</span>
             }
           </span>
-          <span style={s9}>
-            🔁 Repeat Violators:{' '}
-            <span style={{ color: repeatViolatorsCount > 0 ? '#f59e0b' : '#22c984', fontWeight: 600 }}>
-              {repeatViolatorsCount}
-            </span>
+          <span style={s9}>🔁 Repeat Violators:{' '}
+            <span style={{ color: repeatViolatorsCount > 0 ? '#f59e0b' : '#22c984', fontWeight: 600 }}>{repeatViolatorsCount}</span>
           </span>
         </div>
       )
     }
-
     return ''
   }
 
@@ -1266,15 +1183,12 @@ export default function StatCardsPanel({
   const activeModalCard = CARDS.find(c => c.id === activeModal)
   const modalData       = { trendData, displaySafe, displayViolated, displayCompliance, compliance }
 
-  // ── FIXED: Compute top-violation camera from cameraSafe by violation_count ─
-  // Uses violation_count field first, falls back to inverse of safe_count
   const computeTopViolCam = () => {
     if (!cameraSafe?.length) return null
     return [...cameraSafe].sort((a, b) => {
       const aV = a.violation_count ?? a.violations ?? 0
       const bV = b.violation_count ?? b.violations ?? 0
       if (bV !== aV) return bV - aV
-      // tie-break: fewest safe = most at risk
       return (a.safe_count ?? 0) - (b.safe_count ?? 0)
     })[0]
   }
@@ -1295,6 +1209,7 @@ export default function StatCardsPanel({
       {activeModal && activeModalCard && (
         <CardChartModal card={activeModalCard} data={modalData} onClose={() => setActiveModal(null)} />
       )}
+
       {!selectedLocation && selectedCamera && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -1336,11 +1251,10 @@ export default function StatCardsPanel({
             transition:          'grid-template-columns 0.42s cubic-bezier(0.4,0,0.2,1)',
           }}>
             {CARDS.map(c => {
-              // ── Resolve scoped values (location > camera > global) ───────────
               const scopedSafe = (() => {
-                if (selectedLocation && locationKpi) return locationKpi.total_safe ?? '—'
-                if (selectedCamera   && camKpi)      return camKpi.total_safe      ?? '—'
-                if (globalKpi)                       return globalKpi.total_safe   ?? todaySafe
+                if (selectedLocation && locationKpi) return locationKpi.total_safe       ?? '—'
+                if (selectedCamera   && camKpi)      return camKpi.total_safe            ?? '—'
+                if (globalKpi)                       return globalKpi.total_safe         ?? todaySafe
                 return todaySafe
               })()
               const scopedRisk = (() => {
@@ -1352,7 +1266,6 @@ export default function StatCardsPanel({
               const scopedTotal = (typeof scopedSafe === 'number' && typeof scopedRisk === 'number')
                 ? scopedSafe + scopedRisk : '—'
 
-              // ── FIXED: Compliance from resolved KPI, not forced 0% ──────────
               const resolvedCompliancePct = (() => {
                 if (selectedLocation && locationKpi?.compliance_pct != null) return locationKpi.compliance_pct
                 if (selectedCamera   && camKpi?.compliance_pct      != null) return camKpi.compliance_pct
@@ -1360,21 +1273,18 @@ export default function StatCardsPanel({
                 return displayCompliance
               })()
               const scopedCompliance = resolvedCompliancePct
-              // ── FIXED: helmet/vest from compliance prop; never default 0 ────
               const scopedHelmet  = compliance?.helmet ?? null
               const scopedVest    = compliance?.vest   ?? null
               const scopedBothPpe = (scopedHelmet != null && scopedVest != null)
                 ? Math.min(scopedHelmet, scopedVest) : null
 
-              // ── FIXED: Card 3 — top violation camera by violation_count ──────
               const topViolCamEntry = computeTopViolCam()
-              // Prefer violation_count; if not present sort by lowest safe (most at risk)
               const topViolCamName  = topViolCamEntry?.camera_id ?? topViolCamEntry?.camera ?? null
 
-              // When a specific camera/location is selected, show that camera
-              const scopedTopCamera = selectedCamera?.db_id || selectedCamera?.id
-                || (selectedLocation ? topViolCamName : topViolCamName)
-                || '—'
+              // FIX: when a camera is selected, use its MongoDB name (db_id || name) not UI id
+              const scopedTopCamera = selectedCamera
+                ? (selectedCamera.db_id || selectedCamera.name || selectedCamera.id)
+                : (selectedLocation ? topViolCamName : topViolCamName) || '—'
 
               const scopedViolations = (() => {
                 if (selectedLocation && locationKpi) return locationKpi.total_violations ?? maxViolations
@@ -1399,7 +1309,6 @@ export default function StatCardsPanel({
                 return h <= v ? 'Missing Helmet' : 'Missing Vest'
               })()
 
-              // ── FIXED: Active cameras — always 4 when streaming; else from data ──
               const resolvedActiveCameras = isStreaming
                 ? TOTAL_CAMERA_COUNT
                 : (cameraSafe?.length
@@ -1421,7 +1330,6 @@ export default function StatCardsPanel({
                   isActive={false}
                   compact={alertsOpen}
                   onClick={() => handleCardClick(c.id)}
-                  // scoped row data
                   scopedSafe={scopedSafe}
                   scopedRisk={scopedRisk}
                   scopedTotal={scopedTotal}
@@ -1433,14 +1341,11 @@ export default function StatCardsPanel({
                   scopedTopCamera={scopedTopCamera}
                   scopedPeakTime={scopedPeakTime}
                   topViolationType={topViolationType}
-                  // Card 4 deltas
                   safetyImprovementPct={safetyImprovementPct}
                   helmetDelta={helmetDelta}
                   vestDelta={vestDelta}
-                  // Card 1 extras — FIXED: always 4 cameras when streaming
                   activeCameras={resolvedActiveCameras}
                   currentShift={shiftName(bestShift)}
-                  // Card 1 live streaming + auto-refresh
                   isStreaming={isStreaming}
                   onLiveRefresh={handleLiveRefresh}
                   liveRefreshing={liveRefreshing}
@@ -1518,11 +1423,11 @@ export default function StatCardsPanel({
             width="32" height="32" viewBox="0 0 24 24" fill="none"
             stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"
             style={{
-              transform:    alertsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-              transition:   'transform 0.35s cubic-bezier(0.4,0,0.2,1)',
-              filter:       'drop-shadow(0 1px 4px rgba(0,0,0,0.5))',
-              flexShrink:   0, marginBottom: 2,
-              animation:    !alertsOpen ? 'bounceRight 1.6s ease-in-out infinite' : 'none',
+              transform:  alertsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+              transition: 'transform 0.35s cubic-bezier(0.4,0,0.2,1)',
+              filter:     'drop-shadow(0 1px 4px rgba(0,0,0,0.5))',
+              flexShrink: 0, marginBottom: 2,
+              animation:  !alertsOpen ? 'bounceRight 1.6s ease-in-out infinite' : 'none',
             }}
           >
             <polyline points="13 17 8 12 13 7" />
@@ -1543,16 +1448,16 @@ export default function StatCardsPanel({
           pointerEvents: alertsOpen ? 'auto' : 'none',
         }}>
           <div style={{
-            background:    theme === 'dark'
+            background:   theme === 'dark'
               ? (alertCount > 0 ? '#1a0f0f' : '#0d1a12')
               : (alertCount > 0 ? '#fff5f5' : '#f0fdf4'),
-            border:        `1px solid ${alertCount > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,
-            borderRadius:  14, padding: '16px 18px',
-            boxSizing:     'border-box',
-            display:       'flex', flexDirection: 'column',
-            overflow:      'hidden', width: '100%',
-            minHeight:     cardsHeight ? `${cardsHeight}px` : 120,
-            height:        cardsHeight ? `${cardsHeight}px` : 'auto',
+            border:       `1px solid ${alertCount > 0 ? 'rgba(229,62,62,0.3)' : 'rgba(34,201,132,0.2)'}`,
+            borderRadius: 14, padding: '16px 18px',
+            boxSizing:    'border-box',
+            display:      'flex', flexDirection: 'column',
+            overflow:     'hidden', width: '100%',
+            minHeight:    cardsHeight ? `${cardsHeight}px` : 120,
+            height:       cardsHeight ? `${cardsHeight}px` : 'auto',
           }}>
             <AlertsPanelContent
               visibleAlerts={visibleAlerts}

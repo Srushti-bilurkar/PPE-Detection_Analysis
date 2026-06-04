@@ -7,10 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
 
-      // ── Routes served by Node/index1.js on port 3001 ──────────────────
-      // These must come BEFORE the general /api rule below
-      // because Vite matches proxy rules top-to-bottom
-
+      // ── Zone overlay routes → Node/index1.js on port 3001 ─────────────
+      // These MUST come before the general /api rule (Vite matches top-down)
       '/api/cameras': {
         target:       'http://localhost:3001',
         changeOrigin: true,
@@ -24,13 +22,13 @@ export default defineConfig({
         changeOrigin: true,
       },
 
-      // ── HLS streams — also served by Node on port 3001 ────────────────
+      // ── HLS streams → Node/index1.js on port 3001 ─────────────────────
       '/hls': {
         target:       'http://localhost:3001',
         changeOrigin: true,
       },
 
-      // ── Everything else /api/* → Python FastAPI on port 8000 ──────────
+      // ── Everything else /api/* → FastAPI on port 8000 ─────────────────
       '/api': {
         target:       'http://localhost:8000',
         changeOrigin: true,

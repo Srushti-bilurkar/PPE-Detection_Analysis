@@ -15,7 +15,6 @@ export const USERS = {
   ],
 }
 
-// ── Camera name lookup — add a name for every camera ID ──────────────────────
 const CAM_NAMES = {
   'CAM-A01':    'Foundation Pit View',
   'CAM-HYD-1':  'Main Gate Entry',
@@ -39,57 +38,57 @@ const CAM_NAMES = {
   'CAM-HYD-19': 'Site Office Entrance',
   'CAM-HYD-20': 'Emergency Exit Gate',
   'CAM-CHN-1':  'Block B — Perimeter',
+  'CAM-CHN-2':  'Block B — Entry Gate',
 }
 
+// ── withName: sets displayName for UI and name = db_id for MongoDB/API calls ──
+// ✅ Fix — name = MongoDB key, displayName = UI label
 function withName(cam) {
-  return { ...cam, name: CAM_NAMES[cam.id] || cam.id }
+  return {
+    ...cam,
+    displayName: CAM_NAMES[cam.id] || cam.id,
+    name:        cam.db_id,
+  }
 }
+
 export const CAMERA_LOCATIONS = [
   {
-    id:      'bangalore',
-    label:   'Bangalore',
-    icon:    '🏗️',
-    cameras: [{ 
-      id:      'CAM-A01', 
+    id: 'bangalore', label: 'Bangalore', icon: '🏗️',
+    cameras: [withName({
+      id:      'CAM-A01',
       db_id:   'Pier_Cap_Cam_16389',
-      hls_url: '/hls/CAM-A01/stream.m3u8', 
-      ready:   false 
-    }].map(withName),
+      hls_url: '/hls/CAM-A01/stream.m3u8',   // ← keep as CAM-A01
+      ready:   false,
+    })],
   },
   {
-    id:      'hyderabad',
-    label:   'Hyderabad',
-    icon:    '🏢',
+    id: 'hyderabad', label: 'Hyderabad', icon: '🏢',
     cameras: Array.from({ length: 20 }, (_, i) => withName({
       id:      `CAM-HYD-${i + 1}`,
       db_id:   'Pier_Cap_Cam_16388',
-      hls_url: '/hls/CAM-A02/stream.m3u8',
-      ready:   true,
+      hls_url: '/hls/CAM-A02/stream.m3u8',   // ← keep as CAM-A02
+      ready:   i === 0,
     })),
   },
   {
-    id:    'chennai',
-    label: 'Chennai',
-    icon:  '🏭',
+    id: 'chennai', label: 'Chennai', icon: '🏭',
     subLocations: [
       {
-        id:      'chennai_1',
-        label:   'Location 1',
-        cameras: [withName({ 
-          id:      'CAM-CHN-1', 
+        id: 'chennai_1', label: 'Location 1',
+        cameras: [withName({
+          id:      'CAM-CHN-1',
           db_id:   'Pier_Cap_Cam_16387',
-          hls_url: '/hls/CAM-A03/stream.m3u8', 
-          ready:   true 
+          hls_url: '/hls/CAM-A03/stream.m3u8',  // ← keep as CAM-A03
+          ready:   true,
         })],
       },
       {
-        id:      'chennai_2',
-        label:   'Location 2',
-        cameras: [withName({ 
-          id:      'CAM-CHN-2', 
+        id: 'chennai_2', label: 'Location 2',
+        cameras: [withName({
+          id:      'CAM-CHN-2',
           db_id:   'Pier_Cap_Cam_16386',
-          hls_url: '/hls/CAM-A07/stream.m3u8', 
-          ready:   false 
+          hls_url: '/hls/CAM-A07/stream.m3u8',  // ← keep as CAM-A07
+          ready:   false,
         })],
       },
     ],

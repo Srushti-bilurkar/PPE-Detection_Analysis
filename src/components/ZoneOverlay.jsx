@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 // ─────────────────────────────────────────────────────────────────────────────
+// API BASE — points to Express server (port 3001), not Vite (port 5173)
+// Override via VITE_API_URL env variable for production
+// ─────────────────────────────────────────────────────────────────────────────
+const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL)
+  ? import.meta.env.VITE_API_URL
+  : 'http://localhost:3001'
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CSS
 // ─────────────────────────────────────────────────────────────────────────────
 const ZONE_CSS = `
@@ -27,10 +35,12 @@ const ZONE_CSS = `
 .zone-cell-ov.ov-selected {
   border: 2px solid #ffffff !important;
 }
-.zone-cell-ov.tier-high   { background: rgba(34,  197, 94,  0.20); }
-.zone-cell-ov.tier-medium { background: rgba(234, 179, 8,   0.20); }
-.zone-cell-ov.tier-low    { background: rgba(239, 68,  68,  0.20); }
-.zone-cell-ov.tier-nodata { background: rgba(100, 116, 139, 0.06); }
+/* tier backgrounds are applied via inline style bgColor — NOT via CSS class */
+/* CSS class only adds a subtle tier-coloured outline for extra clarity */
+.zone-cell-ov.tier-high   { outline: 1px solid rgba(34,  197, 94,  0.45); }
+.zone-cell-ov.tier-medium { outline: 1px solid rgba(234, 179, 8,   0.45); }
+.zone-cell-ov.tier-low    { outline: 1px solid rgba(239, 68,  68,  0.45); }
+.zone-cell-ov.tier-nodata { outline: none; }
 
 .ov-zone-id {
   position: absolute;
@@ -97,6 +107,16 @@ const ZONE_CSS = `
 .ov-tt-medium { background: rgba(234,179,8,0.15);   color: #fde047; }
 .ov-tt-low    { background: rgba(239,68,68,0.15);   color: #fca5a5; }
 .ov-tt-nodata { background: rgba(100,116,139,0.12); color: #94a3b8; }
+
+.ov-error-badge {
+  position: absolute;
+  top: 6px; left: 50%; transform: translateX(-50%);
+  font-size: 9px; color: #fca5a5;
+  background: rgba(239,68,68,0.18);
+  padding: 2px 7px; border-radius: 8px;
+  white-space: nowrap; pointer-events: none; user-select: none;
+  z-index: 10;
+}
 `
 
 let ovCssInjected = false
@@ -125,7 +145,7 @@ function adviceText(tier) {
   return 'No detection data yet for this zone.'
 }
 
-// getVideoRect - only used for object-fit:contain (modal) to exclude black bars
+// getVideoRect — only used for object-fit:contain (modal) to exclude black bars
 function getVideoRect(containerEl, videoNativeW, videoNativeH) {
   const cw = containerEl.offsetWidth
   const ch = containerEl.offsetHeight
@@ -142,30 +162,33 @@ function getVideoRect(containerEl, videoNativeW, videoNativeH) {
   return { left: offsetX, top: offsetY, width: renderW, height: renderH }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // ZoneOverlay
 //
 // Props:
-//   cameraName  - MongoDB camera name string
-//   mode        - 'cover'   -> thumbnail grid cells (object-fit:cover, no black
-//                              bars, overlay fills the full cell via inset:0)
-//               - 'contain' -> modal / expanded view (object-fit:contain, may
-//                              have black bars, overlay is calculated to match
-//                              only the actual video pixels)
-//               default: 'cover'
-export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
+//   cameraName   - MongoDB camera name string  (e.g. "Pier_Cap_Cam_16389")
+//                  *** MUST be cam.name, NOT cam.id ***
+//   mode         - 'cover'   → thumbnail grid  (overlay fills cell via inset:0)
+//                - 'contain' → modal / expanded (overlay matches video pixels)
+//                default: 'cover'
+//   selectedDate - optional YYYY-MM-DD; defaults to today IST
+// ─────────────────────────────────────────────────────────────────────────────
+export default function ZoneOverlay({ cameraName, mode = 'cover', selectedDate = null }) {
   injectOvCSS()
 
   const [zoneData,     setZoneData]     = useState({})
+  const [loading,      setLoading]      = useState(true)
+  const [fetchError,   setFetchError]   = useState(null)
   const [visible,      setVisible]      = useState(true)
   const [view,         setView]         = useState('live')
-  const [opacity,      setOpacity]      = useState(0.20)
+  const [opacity,      setOpacity]      = useState(0.35)
   const [selectedZone, setSelectedZone] = useState(null)
   const [tooltipPos,   setTooltipPos]   = useState({ top: 8, left: 'auto', right: 8 })
   const [videoRect,    setVideoRect]    = useState(null)
 
   const containerRef = useRef(null)
 
-  // Compute video rect (only meaningful in 'contain' mode)
+  // ── Compute video rect (only meaningful in 'contain' mode) ───────────────
   const computeRect = useCallback(() => {
     if (mode !== 'contain') return
     if (!containerRef.current) return
@@ -199,46 +222,111 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
     }
   }, [computeRect, mode])
 
-  // Fetch zone data every 60 seconds
+  // ── Fetch zone data every 60 s ───────────────────────────────────────────
   useEffect(() => {
     if (!cameraName) return
+
     const fetchData = async () => {
       try {
-        const date = getTodayIST()
-        const res  = await fetch(`/api/zone-map?camera=${encodeURIComponent(cameraName)}&date=${date}`)
-        if (!res.ok) return
+        setFetchError(null)
+        const date = selectedDate || getTodayIST()
+
+        // FIX: absolute URL → Express on :3001, not Vite on :5173
+        const url = `${API_BASE}/api/zone-map?camera=${encodeURIComponent(cameraName)}&date=${date}`
+        console.debug('[ZoneOverlay] fetching:', url)
+
+        const res = await fetch(url)
+        if (!res.ok) {
+          console.warn('[ZoneOverlay] HTTP', res.status, url)
+          setFetchError(`API error ${res.status}`)
+          setLoading(false)
+          return
+        }
+
         const json = await res.json()
-        setZoneData(json.cameras?.[cameraName] || {})
+        console.debug('[ZoneOverlay] raw response:', json)
+
+        // Try exact match → case-insensitive match → first available camera
+        const cameras = json.cameras || {}
+        const matchedKey =
+          cameras[cameraName] !== undefined
+            ? cameraName
+            : Object.keys(cameras).find(
+                k => k.toLowerCase() === cameraName.toLowerCase()
+              ) ?? Object.keys(cameras)[0]
+
+        const data = matchedKey ? cameras[matchedKey] : {}
+
+        if (!matchedKey) {
+          console.warn('[ZoneOverlay] camera not found. Available:', Object.keys(cameras))
+          setFetchError(`Camera "${cameraName}" not in response`)
+        }
+
+        console.debug('[ZoneOverlay] zones for', cameraName, '(key:', matchedKey, '):', data)
+        setZoneData(data)
+        setLoading(false)
       } catch (err) {
         console.error('[ZoneOverlay] fetch error:', err)
+        setFetchError(err.message)
+        setLoading(false)
       }
     }
+
     fetchData()
     const id = setInterval(fetchData, 60_000)
     return () => clearInterval(id)
-  }, [cameraName])
+  }, [cameraName, selectedDate])  // re-fetch when date picker changes
 
+  // ── Display logic ────────────────────────────────────────────────────────
   const getDisplay = (zoneId) => {
     const z = zoneData[zoneId]
     if (!z) return { pct: null, tier: 'nodata', label: '—', sub: '' }
-    if (view === 'static') {
-      const s = z.static
-      if (s) return { pct: Math.round(s.quality * 100), tier: s.tier, label: s.blur_label, sub: s.proximity }
-    }
-    if (view === 'live') {
-      const l = z.live_gpt
-      if (l) return {
-        pct:   Math.round(l.quality * 100),
-        tier:  l.tier,
-        label: `${l.detection_count} seen`,
-        sub:   l.total_violations > 0 ? `${l.total_violations} viol` : 'live gpt',
+
+    const live     = z.live_gpt
+    const stat     = z.static
+    const combined = z.combined   // total_violations lives on combined
+
+    if (view === 'live' && live) {
+      return {
+        pct:   Math.round(live.quality * 100),
+        tier:  live.tier,
+        label: `${live.detection_count} seen`,
+        sub:   (combined?.total_violations ?? 0) > 0
+                 ? `${combined.total_violations} viol`
+                 : 'live gpt',
       }
     }
-    const s = z.static
-    if (s) return { pct: Math.round(s.quality * 100), tier: s.tier, label: s.blur_label, sub: 'static' }
+    if (view === 'static' && stat) {
+      return {
+        pct:   Math.round(stat.quality * 100),
+        tier:  stat.tier,
+        label: stat.blur_label,
+        sub:   stat.proximity,
+      }
+    }
+    // Fallback: use whichever source exists
+    if (live) {
+      return {
+        pct:   Math.round(live.quality * 100),
+        tier:  live.tier,
+        label: `${live.detection_count} seen`,
+        sub:   (combined?.total_violations ?? 0) > 0
+                 ? `${combined.total_violations} viol`
+                 : 'live',
+      }
+    }
+    if (stat) {
+      return {
+        pct:   Math.round(stat.quality * 100),
+        tier:  stat.tier,
+        label: stat.blur_label,
+        sub:   'static',
+      }
+    }
     return { pct: null, tier: 'nodata', label: '—', sub: 'no data' }
   }
 
+  // ── Zone click handler ───────────────────────────────────────────────────
   const handleZoneClick = (e, zoneId) => {
     e.stopPropagation()
     if (selectedZone === zoneId) { setSelectedZone(null); return }
@@ -256,6 +344,7 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
     setSelectedZone(zoneId)
   }
 
+  // ── Tooltip ──────────────────────────────────────────────────────────────
   const renderTooltip = () => {
     const z = zoneData[selectedZone] || {}
     const d = getDisplay(selectedZone)
@@ -270,7 +359,8 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
         <div className="ov-tt-row"><span>Image quality</span><b>{z.static?.blur_label || '—'}</b></div>
         <div className="ov-tt-row"><span>Proximity</span><b>{z.static?.proximity || '—'}</b></div>
         <div className="ov-tt-row"><span>Detections today</span><b>{z.live_gpt?.detection_count ?? '—'}</b></div>
-        <div className="ov-tt-row"><span>Violations flagged</span><b>{z.live_gpt?.total_violations ?? '—'}</b></div>
+        {/* violations live on combined, not live_gpt */}
+        <div className="ov-tt-row"><span>Violations flagged</span><b>{z.combined?.total_violations ?? '—'}</b></div>
         <div className={`ov-tt-advice ov-tt-${d.tier}`}>{adviceText(d.tier)}</div>
       </div>
     )
@@ -278,10 +368,17 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
 
   const viewLabels = { static: 'Static', live: 'Live' }
 
-  // cover mode  -> always fill entire cell (inset: 0)
-  // contain mode -> only cover actual video pixels (excludes black bars)
+  // cover mode   → always fill entire cell (inset: 0)
+  // contain mode → only cover actual video pixels (excludes black bars)
   const overlayStyle = (mode === 'contain' && videoRect)
-    ? { position: 'absolute', left: videoRect.left, top: videoRect.top, width: videoRect.width, height: videoRect.height, zIndex: 5 }
+    ? {
+        position: 'absolute',
+        left: videoRect.left,
+        top: videoRect.top,
+        width: videoRect.width,
+        height: videoRect.height,
+        zIndex: 5,
+      }
     : { position: 'absolute', inset: 0, zIndex: 5 }
 
   return (
@@ -290,16 +387,28 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
       style={{ position: 'absolute', inset: 0, zIndex: 5, pointerEvents: 'none' }}
       onClick={() => setSelectedZone(null)}
     >
+      {/* Error badge — only visible when fetch fails */}
+      {fetchError && (
+        <div className="ov-error-badge">⚠ {fetchError}</div>
+      )}
+
       {visible && (
         <div className="zone-grid-overlay interactive" style={overlayStyle}>
           {ZONE_IDS.map(zoneId => {
-            const d      = getDisplay(zoneId)
-            const sel    = selectedZone === zoneId
-            const bgColor =
-              d.tier === 'high'   ? `rgba(34,197,94,${opacity})`   :
-              d.tier === 'medium' ? `rgba(234,179,8,${opacity})`   :
-              d.tier === 'low'    ? `rgba(239,68,68,${opacity})`   :
-                                    `rgba(100,116,139,0.06)`
+            const d   = getDisplay(zoneId)
+            const sel = selectedZone === zoneId
+
+            // While loading: show shimmer so grid is visible immediately
+            const bgColor = loading
+              ? `rgba(100, 116, 139, 0.18)`
+              : d.tier === 'high'
+                ? `rgba(34,  197, 94,  ${opacity})`
+                : d.tier === 'medium'
+                  ? `rgba(234, 179, 8,   ${opacity})`
+                  : d.tier === 'low'
+                    ? `rgba(239, 68,  68,  ${opacity})`
+                    : `rgba(100, 116, 139, ${Math.max(opacity * 0.5, 0.12)})`
+
             return (
               <div
                 key={zoneId}
@@ -308,7 +417,9 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
                 onClick={(e) => handleZoneClick(e, zoneId)}
               >
                 <span className="ov-zone-id">{zoneId}</span>
-                {d.pct !== null && <span className="ov-conf-badge">{d.pct}%</span>}
+                {d.pct !== null && (
+                  <span className="ov-conf-badge">{d.pct}%</span>
+                )}
                 <span className="ov-blur-label">
                   {d.label}{d.sub ? ` · ${d.sub}` : ''}
                 </span>
@@ -320,7 +431,11 @@ export default function ZoneOverlay({ cameraName, mode = 'cover' }) {
 
       {visible && selectedZone && renderTooltip()}
 
-      <div className="ov-controls" style={{ pointerEvents: 'all' }} onClick={e => e.stopPropagation()}>
+      <div
+        className="ov-controls"
+        style={{ pointerEvents: 'all' }}
+        onClick={e => e.stopPropagation()}
+      >
         <button
           className={`ov-btn ${visible ? 'ov-active' : ''}`}
           onClick={() => { setVisible(v => !v); setSelectedZone(null) }}

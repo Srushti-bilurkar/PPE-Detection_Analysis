@@ -1,6 +1,4 @@
-// index1.js
-// ─────────────────────────────────────────────────────────────────────────────
- 
+// index1.js  (ES Module — works with "type":"module" in package.json)
 import ffmpegFluent from 'fluent-ffmpeg';
 import { MongoClient } from 'mongodb';
 import fs from 'fs';
@@ -8,17 +6,17 @@ import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
- 
-// ── ES MODULE FIX ────────────────────────────────────────────────────────────
+
+// ES module fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
- 
-// ── CONFIG ───────────────────────────────────────────────────────────────────
+
+// ── CONFIG ────────────────────────────────────────────────────────────────────
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
 const DB_NAME   = process.env.DB_NAME   || 'construction_monitor';
 const INTERVAL  = parseInt(process.env.INTERVAL || '10000', 10);
- 
-// ── CAMERAS ──────────────────────────────────────────────────────────────────
+
+// ── CAMERAS ───────────────────────────────────────────────────────────────────
 const CAMERAS = [
   {
     name: 'Pier_Cap_Cam_16389',
@@ -37,85 +35,81 @@ const CAMERAS = [
     url:  'rtsp://admin:admin%40123@106.51.96.174:16386/cam/realmonitor?channel=1&subtype=0',
   },
 ];
- 
-// ── FILE SETUP ───────────────────────────────────────────────────────────────
+
+// ── FILE SETUP ────────────────────────────────────────────────────────────────
 const FILES_DIR = path.join(__dirname, 'files');
-if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
- 
-// ── EXPRESS ──────────────────────────────────────────────────────────────────
+if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR);
+
+// ── EXPRESS ───────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use('/hls', express.static(path.join(__dirname, 'hls')));
- 
-// ── MONGO ────────────────────────────────────────────────────────────────────
+
+// ── MONGO ─────────────────────────────────────────────────────────────────────
 const mongoClient = new MongoClient(MONGO_URL);
 let db;
- 
+
 async function connectMongo() {
   await mongoClient.connect();
   db = mongoClient.db(DB_NAME);
   console.log('MongoDB connected');
 }
- 
-// ── IST HELPERS ──────────────────────────────────────────────────────────────
+
+// ── IST HELPERS ───────────────────────────────────────────────────────────────
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
- 
+
 function toIST(date) {
   return new Date(date.getTime() + IST_OFFSET_MS);
 }
- 
+
 function formatIST(date) {
   const ist = toIST(date);
-  return (
-    ist.getUTCFullYear() + '-' +
+  return ist.getUTCFullYear() + '-' +
     String(ist.getUTCMonth() + 1).padStart(2, '0') + '-' +
     String(ist.getUTCDate()).padStart(2, '0') + ' ' +
     String(ist.getUTCHours()).padStart(2, '0') + ':' +
     String(ist.getUTCMinutes()).padStart(2, '0') + ':' +
-    String(ist.getUTCSeconds()).padStart(2, '0') + ' IST'
-  );
+    String(ist.getUTCSeconds()).padStart(2, '0') + ' IST';
 }
- 
+
 function todayIST() {
   const ist = new Date(Date.now() + IST_OFFSET_MS);
   return ist.toISOString().slice(0, 10);
 }
- 
-// ── API: CAMERAS ─────────────────────────────────────────────────────────────
-// CHANGED: now returns full camera objects with id, name, hls_url, ready
-// The `name` field is what ZoneOverlay uses to call /api/zone-map
-app.get('/api/cameras', async (req, res) => {
+
+// ── API: CAMERAS ──────────────────────────────────────────────────────────────
+app.get('/api/cameras', (req, res) => {
   try {
     const cameras = CAMERAS.map(cam => {
       const hlsPath = path.join(__dirname, 'hls', cam.name, 'stream.m3u8');
       return {
-        id:      cam.name,                                                       // display label e.g. "Pier_Cap_Cam_16389"
-        name:    cam.name,                                                       // actual MongoDB camera name — used by ZoneOverlay
-        hls_url: `http://localhost:3001/hls/${cam.name}/stream.m3u8`,
+        id:      cam.name,
+        name:    cam.name,
+        hls_url: `/hls/${cam.name}/stream.m3u8`,
         ready:   fs.existsSync(hlsPath),
       };
     });
- 
     res.json({ cameras });
- 
   } catch (err) {
     console.error('cameras API error:', err);
     res.status(500).json({ error: err.message });
   }
 });
- 
-// ── API: ZONE CONFIDENCE (existing) ──────────────────────────────────────────
+
+// ── API: ZONE CONFIDENCE ──────────────────────────────────────────────────────
 app.get('/api/zone-confidence', async (req, res) => {
   try {
+    if (!db) return res.status(503).json({ error: 'DB not ready yet, retry in a moment' });
+
     const camera = req.query.camera || null;
     const date   = req.query.date   || todayIST();
- 
+
     const query = { date };
     if (camera) query.camera = camera;
- 
+
     const zones = await db.collection('zone_confidence').find(query).toArray();
- 
+
     const byCamera = {};
     for (const z of zones) {
       if (!byCamera[z.camera]) byCamera[z.camera] = {};
@@ -131,80 +125,67 @@ app.get('/api/zone-confidence', async (req, res) => {
         last_updated:    z.last_updated_ist,
       };
     }
- 
+
     res.json({ date, cameras: byCamera });
- 
   } catch (err) {
     console.error('zone-confidence API error:', err);
     res.status(500).json({ error: err.message });
   }
 });
- 
-// ── API: ZONE MAP (NEW) ───────────────────────────────────────────────────────
-// Called by ZoneOverlay.jsx every 60 seconds.
-// Returns all three scoring methods per zone:
-//   static   → from camera_zone_quality (set once by proximity_configurator.py)
-//   live_gpt → from zone_confidence.avg_gpt_conf (GPT-4o live confidence)
-//   combined → from zone_confidence.final_quality (static + live averaged)
-//
-// GET /api/zone-map?camera=Pier_Cap_Cam_16389&date=2026-05-22
+
+// ── API: ZONE MAP ─────────────────────────────────────────────────────────────
 app.get('/api/zone-map', async (req, res) => {
   try {
+    if (!db) return res.status(503).json({ error: 'DB not ready yet, retry in a moment' });
+
     const camera = req.query.camera || null;
     const date   = req.query.date   || todayIST();
- 
-    // ── 1. Static proximity config (camera_zone_quality) ─────────────────
-    // Written once by proximity_configurator.py — never changes unless
-    // cameras are repositioned.
+
+    // 1. Static proximity config
     const staticQuery = camera ? { camera } : {};
     const staticDocs  = await db
       .collection('camera_zone_quality')
       .find(staticQuery)
       .toArray();
- 
+
     const staticMap = {};
     for (const d of staticDocs) {
       if (!staticMap[d.camera]) staticMap[d.camera] = {};
       staticMap[d.camera][d.zone_id] = {
-        proximity:      d.proximity,        // "close" | "medium" | "far"
-        static_quality: d.static_quality,   // 0.90 | 0.60 | 0.35
-        blur_label:     d.blur_label,       // "sharp" | "moderate" | "blurry"
-        trust_alerts:   d.trust_alerts,     // true | "verify" | false
+        proximity:      d.proximity,
+        static_quality: d.static_quality,
+        blur_label:     d.blur_label,
+        trust_alerts:   d.trust_alerts,
         tier: d.static_quality >= 0.75 ? 'high'
             : d.static_quality >= 0.50 ? 'medium'
             : 'low',
       };
     }
- 
-    // ── 2. Live zone_confidence (updated every ~60s by zone_aggregator.py) ─
+
+    // 2. Live zone_confidence
     const liveQuery = { date };
     if (camera) liveQuery.camera = camera;
- 
+
     const liveDocs = await db
       .collection('zone_confidence')
       .find(liveQuery)
       .toArray();
- 
+
     const liveMap = {};
     for (const d of liveDocs) {
       if (!liveMap[d.camera]) liveMap[d.camera] = {};
- 
-      // avg_gpt_conf is set by updated zone_aggregator.py
-      // falls back to avg_conf if older version of aggregator ran
       const gptConf = d.avg_gpt_conf ?? d.avg_conf ?? null;
- 
+
       liveMap[d.camera][d.zone_id] = {
-        // Method 2 — live GPT-4o only
         live_gpt: gptConf !== null ? {
           quality:         gptConf,
           tier:            gptConf >= 0.75 ? 'high'
                          : gptConf >= 0.50 ? 'medium' : 'low',
-          detection_count: d.detection_count  || 0,
+          detection_count: d.detection_count || 0,
           helmet_conf:     d.avg_helmet_conf,
           vest_conf:       d.avg_vest_conf,
         } : null,
- 
-        // Method 3 — combined (final_quality computed by zone_aggregator.py)
+
         combined: {
           quality:          d.final_quality ?? gptConf ?? 0,
           tier:             d.confidence_tier || 'low',
@@ -215,30 +196,28 @@ app.get('/api/zone-map', async (req, res) => {
         },
       };
     }
- 
-    // ── 3. Build all zone IDs ─────────────────────────────────────────────
+
+    // 3. All zone IDs
     const allZones = [];
     for (let r = 0; r < 3; r++)
       for (let c = 0; c < 3; c++)
         allZones.push(`r${r}c${c}`);
- 
-    // ── 4. Merge static + live per zone per camera ────────────────────────
+
+    // 4. Merge per camera
     const allCameras = new Set([
       ...Object.keys(staticMap),
       ...Object.keys(liveMap),
-      // always include requested camera even if no data yet
       ...(camera ? [camera] : CAMERAS.map(c => c.name)),
     ]);
- 
+
     const result = {};
     for (const cam of allCameras) {
       result[cam] = {};
       for (const zone_id of allZones) {
         const s = (staticMap[cam] || {})[zone_id] || null;
         const l = (liveMap[cam]   || {})[zone_id] || null;
- 
+
         result[cam][zone_id] = {
-          // Method 1 — static proximity
           static: s ? {
             proximity:    s.proximity,
             quality:      s.static_quality,
@@ -246,12 +225,7 @@ app.get('/api/zone-map', async (req, res) => {
             trust_alerts: s.trust_alerts,
             tier:         s.tier,
           } : null,
- 
-          // Method 2 — live GPT-4o
           live_gpt: l?.live_gpt || null,
- 
-          // Method 3 — combined
-          // If no live data yet, fall back to static quality so no zone is ever gray
           combined: l?.combined || (s ? {
             quality:          s.static_quality,
             tier:             s.tier,
@@ -262,21 +236,20 @@ app.get('/api/zone-map', async (req, res) => {
         };
       }
     }
- 
+
     res.json({ date, cameras: result });
- 
   } catch (err) {
     console.error('zone-map API error:', err);
     res.status(500).json({ error: err.message });
   }
 });
- 
-// ── IMAGE DIMENSIONS ─────────────────────────────────────────────────────────
+
+// ── IMAGE DIMENSIONS ──────────────────────────────────────────────────────────
 function getImageDimensions(imagePath) {
   return new Promise((resolve) => {
     ffmpegFluent.ffprobe(imagePath, (err, metadata) => {
       if (err) {
-        console.warn(`WARNING: ffprobe failed for ${imagePath}`);
+        console.warn(`  WARNING: ffprobe failed for ${imagePath}, defaulting to 1920x1080`);
         resolve({ frame_w: 1920, frame_h: 1080 });
         return;
       }
@@ -289,16 +262,16 @@ function getImageDimensions(imagePath) {
     });
   });
 }
- 
-// ── SAVE SNAPSHOT ────────────────────────────────────────────────────────────
+
+// ── SAVE SNAPSHOT ─────────────────────────────────────────────────────────────
 async function saveToMongo(imagePath, cameraName) {
   const imageBase64 = fs.readFileSync(imagePath).toString('base64');
   const now_utc     = new Date();
   const filename    = path.basename(imagePath);
   const istString   = formatIST(now_utc);
- 
+
   const { frame_w, frame_h } = await getImageDimensions(imagePath);
- 
+
   const result = await db.collection('snapshots').insertOne({
     camera:            cameraName,
     timestamp:         now_utc,
@@ -312,28 +285,24 @@ async function saveToMongo(imagePath, cameraName) {
     frame_w,
     frame_h,
   });
- 
-  console.log(`[${cameraName}] Saved to MongoDB  id=${result.insertedId}`);
+
+  console.log(`[${cameraName}] Saved to MongoDB  _id=${result.insertedId}  ${frame_w}x${frame_h}  ${istString}`);
   return result.insertedId;
 }
- 
-// ── HLS STREAM ───────────────────────────────────────────────────────────────
+
+// ── HLS STREAM ────────────────────────────────────────────────────────────────
 function startHLSStream(camera) {
   const hlsDir = path.join(__dirname, 'hls', camera.name);
   if (!fs.existsSync(hlsDir)) fs.mkdirSync(hlsDir, { recursive: true });
- 
+
   const hlsPath = path.join(hlsDir, 'stream.m3u8');
- 
+
   ffmpegFluent(camera.url)
     .inputOptions(['-rtsp_transport', 'tcp', '-rtsp_flags', 'prefer_tcp'])
     .outputOptions([
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-tune', 'zerolatency',
-      '-hls_time', '2',
-      '-hls_list_size', '3',
-      '-hls_flags', 'delete_segments',
-      '-f', 'hls',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+      '-hls_time', '2', '-hls_list_size', '3',
+      '-hls_flags', 'delete_segments', '-f', 'hls',
     ])
     .output(hlsPath)
     .on('start', () => console.log(`[${camera.name}] HLS started`))
@@ -343,17 +312,15 @@ function startHLSStream(camera) {
     })
     .run();
 }
- 
-// ── SNAPSHOT LOOP ────────────────────────────────────────────────────────────
+
+// ── SNAPSHOT LOOP ─────────────────────────────────────────────────────────────
 function takeSnapshot(camera) {
   const filename = path.join(FILES_DIR, `${camera.name}_${Date.now()}.jpg`);
- 
+
   ffmpegFluent(camera.url)
     .inputOptions([
-      '-rtsp_transport',  'tcp',
-      '-rtsp_flags',      'prefer_tcp',
-      '-analyzeduration', '5000000',
-      '-probesize',       '5000000',
+      '-rtsp_transport', 'tcp', '-rtsp_flags', 'prefer_tcp',
+      '-analyzeduration', '5000000', '-probesize', '5000000',
     ])
     .frames(1)
     .outputOptions(['-q:v 2'])
@@ -361,7 +328,6 @@ function takeSnapshot(camera) {
     .on('end', async () => {
       console.log(`[${camera.name}] Snapshot captured`);
       await saveToMongo(filename, camera.name);
-      console.log(`[${camera.name}] Next in ${INTERVAL / 1000}s`);
       setTimeout(() => takeSnapshot(camera), INTERVAL);
     })
     .on('error', (err) => {
@@ -370,33 +336,32 @@ function takeSnapshot(camera) {
     })
     .run();
 }
- 
-// ── MAIN ─────────────────────────────────────────────────────────────────────
+
+// ── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('Construction Monitor Started');
+  console.log('Construction Monitor — Camera Capture + Zone API');
+  console.log('=================================================');
+
   await connectMongo();
- 
+
   app.listen(3001, () => {
     console.log('Server running on http://localhost:3001');
-    console.log('Endpoints:');
     console.log('  GET /api/cameras');
     console.log('  GET /api/zone-confidence?camera=<name>&date=<YYYY-MM-DD>');
     console.log('  GET /api/zone-map?camera=<name>&date=<YYYY-MM-DD>');
   });
- 
+
   CAMERAS.forEach(cam => {
     startHLSStream(cam);
     takeSnapshot(cam);
   });
 }
- 
-// ── SHUTDOWN ─────────────────────────────────────────────────────────────────
+
+// ── SHUTDOWN ──────────────────────────────────────────────────────────────────
 process.on('SIGINT', async () => {
   console.log('\nShutting down...');
   await mongoClient.close();
   process.exit(0);
 });
- 
-// ── START ────────────────────────────────────────────────────────────────────
+
 main().catch(console.error);
- 

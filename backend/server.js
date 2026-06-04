@@ -182,6 +182,108 @@ app.delete('/api/images/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+function todayIST() {
+  const ist = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  return ist.toISOString().slice(0, 10);
+}
+
+app.get('/api/zone-map', async (req, res) => {
+  try {
+    const camera = req.query.camera || null;
+    const date   = req.query.date   || todayIST();
+    const db     = mongoose.connection.db;
+
+    const staticQuery = camera ? { camera } : {};
+    const staticDocs  = await db.collection('camera_zone_quality').find(staticQuery).toArray();
+
+    const staticMap = {};
+    for (const d of staticDocs) {
+      if (!staticMap[d.camera]) staticMap[d.camera] = {};
+      staticMap[d.camera][d.zone_id] = {
+        proximity:      d.proximity,
+        static_quality: d.static_quality,
+        blur_label:     d.blur_label,
+        trust_alerts:   d.trust_alerts,
+        tier: d.static_quality >= 0.75 ? 'high'
+            : d.static_quality >= 0.50 ? 'medium'
+            : 'low',
+      };
+    }
+
+    const liveQuery = { date };
+    if (camera) liveQuery.camera = camera;
+
+    const liveDocs = await db.collection('zone_confidence').find(liveQuery).toArray();
+    const liveMap  = {};
+    for (const d of liveDocs) {
+      if (!liveMap[d.camera]) liveMap[d.camera] = {};
+      const gptConf = d.avg_gpt_conf ?? d.avg_conf ?? null;
+      liveMap[d.camera][d.zone_id] = {
+        live_gpt: gptConf !== null ? {
+          quality:         gptConf,
+          tier:            gptConf >= 0.75 ? 'high'
+                         : gptConf >= 0.50 ? 'medium' : 'low',
+          detection_count: d.detection_count || 0,
+          helmet_conf:     d.avg_helmet_conf,
+          vest_conf:       d.avg_vest_conf,
+        } : null,
+        combined: {
+          quality:          d.final_quality ?? gptConf ?? 0,
+          tier:             d.confidence_tier || 'low',
+          source:           d.source || 'live_only',
+          detection_count:  d.detection_count || 0,
+          total_violations: d.total_violations || 0,
+          last_updated:     d.last_updated_ist,
+        },
+      };
+    }
+
+    const allZones = [];
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        allZones.push(`r${r}c${c}`);
+      }
+    }
+
+    const allCameras = new Set([
+      ...Object.keys(staticMap),
+      ...Object.keys(liveMap),
+      ...(camera ? [camera] : []),
+    ]);
+
+    const result = {};
+    for (const cam of allCameras) {
+      result[cam] = {};
+      for (const zoneId of allZones) {
+        const s = (staticMap[cam] || {})[zoneId] || null;
+        const l = (liveMap[cam]   || {})[zoneId] || null;
+        result[cam][zoneId] = {
+          static: s ? {
+            proximity:    s.proximity,
+            quality:      s.static_quality,
+            blur_label:   s.blur_label,
+            trust_alerts: s.trust_alerts,
+            tier:         s.tier,
+          } : null,
+          live_gpt: l?.live_gpt || null,
+          combined: l?.combined || (s ? {
+            quality:          s.static_quality,
+            tier:             s.tier,
+            source:           'proximity_only',
+            detection_count:  0,
+            total_violations: 0,
+          } : null),
+        };
+      }
+    }
+
+    res.json({ date, cameras: result });
+  } catch (err) {
+    console.error('zone-map API error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/send-email', async (req, res) => {
   const { subject, message, to, reportHTML } = req.body;
 

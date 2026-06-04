@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import ZoneOverlay from './ZoneOverlay'
 
 const GAP = 8
 const ROW_H_RATIO = 9 / 16
@@ -47,7 +48,6 @@ const GRID_CSS = `
   z-index: 3; pointer-events: none;
 }
 
-/* ── text labels — always white so they're visible on any video ── */
 .cam-id-badge {
   font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
   color: #ffffff;
@@ -80,7 +80,6 @@ const GRID_CSS = `
 }
 .cam-btn:hover .cam-expand-hint { opacity: 1; }
 
-/* grid */
 .cam-grid-outer { width: 100%; box-sizing: border-box; }
 .cam-grid-scroll {
   overflow-y: auto; overflow-x: hidden;
@@ -97,7 +96,6 @@ const GRID_CSS = `
   justify-content: center; align-items: center;
 }
 
-/* header */
 .cam-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8px;
@@ -109,7 +107,6 @@ const GRID_CSS = `
 .cam-count-label.dark  { color: #475569; }
 .cam-count-label.light { color: #334155; }
 
-/* search */
 .cam-search-wrap {
   display: flex; align-items: center; gap: 6px;
   border-radius: 7px; padding: 4px 8px;
@@ -126,7 +123,6 @@ const GRID_CSS = `
 .cam-search-input.dark  { color: #e2e8f0; }
 .cam-search-input.light { color: #1e293b; }
 
-/* scroll hint */
 .cam-scroll-bar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 4px 8px 2px;
@@ -141,7 +137,6 @@ const GRID_CSS = `
 .cam-page-label { font-size: 10px; color: #475569; font-family: monospace; }
 .cam-no-results { padding: 16px; font-size: 12px; font-family: monospace; }
 
-/* modal */
 .cam-modal-backdrop {
   position: fixed; inset: 0; z-index: 9999;
   background: rgba(2,6,23,0.92); backdrop-filter: blur(8px);
@@ -267,7 +262,7 @@ function ZoomModal({ cam, onClose }) {
         <div className="cam-modal-topbar">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', fontFamily: 'monospace' }}>{cam.id}</span>
-            {cam.name && <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>— {cam.name}</span>}
+            {cam.displayName && <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>— {cam.displayName}</span>}
             <span className={`cam-status-pill ${cam.ready ? 'live' : 'offline'}`}>{cam.ready ? '● LIVE' : '○ WAIT'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -287,12 +282,15 @@ function ZoomModal({ cam, onClose }) {
           onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
         >
           <div style={{
+            position: 'relative',
             width: '100%', height: '100%',
             transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
             transformOrigin: 'center center',
             transition: isPanning.current ? 'none' : 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1)',
           }}>
             <CamVideo cam={cam} objFit="contain" />
+            {/* FIX: pass cam.name (MongoDB key) not cam.id (display label) */}
+            <ZoneOverlay cameraName={cam.name} mode="contain" />
           </div>
         </div>
       </div>
@@ -302,14 +300,9 @@ function ZoomModal({ cam, onClose }) {
 
 /* ── Layout helpers ── */
 function computeLayout(n, W) {
-  // 1 camera → fixed 500×250
   if (n === 1) return { cols: 1, cW: 500, cH: 250 }
-
-  // multiple cameras → divide container width evenly
-  // pick cols so each cell is as close to 160px as possible
   const ideal = Math.floor((W + GAP) / (160 + GAP))
   const cols = Math.min(Math.max(1, ideal), Math.min(n, MAX_COLS))
-  // cell width = fill the row evenly, but never below MIN_CELL_W
   const cW = Math.max(MIN_CELL_W, (W - 4 - (cols - 1) * GAP) / cols)
   const cH = Math.round(cW * ROW_H_RATIO)
   return { cols, cW, cH }
@@ -337,16 +330,17 @@ export default function CameraGrid({ cameras = [], theme = 'dark', onCamSelect }
   const t = theme === 'light' ? 'light' : 'dark'
 
   const slots = cameras.length > 0 ? cameras : [
-    { id: 'CAM-A01', name: 'Entry Gate A',    hls_url: '/hls/CAM-A01/stream.m3u8', ready: false },
-    { id: 'CAM-A02', name: 'North Perimeter', hls_url: '/hls/CAM-A02/stream.m3u8', ready: false },
-    { id: 'CAM-A03', name: 'Lift Shaft B3',   hls_url: '/hls/CAM-A03/stream.m3u8', ready: false },
-    { id: 'CAM-A07', name: 'Loading Bay',     hls_url: '/hls/CAM-A07/stream.m3u8', ready: false },
+    { id: 'CAM-A01', name: 'Pier_Cap_Cam_16389', displayName: 'Entry Gate A',    hls_url: '/hls/CAM-A01/stream.m3u8', ready: false },
+    { id: 'CAM-A02', name: 'Pier_Cap_Cam_16388', displayName: 'North Perimeter', hls_url: '/hls/CAM-A02/stream.m3u8', ready: false },
+    { id: 'CAM-A03', name: 'Pier_Cap_Cam_16387', displayName: 'Lift Shaft B3',   hls_url: '/hls/CAM-A03/stream.m3u8', ready: false },
+    { id: 'CAM-A07', name: 'Pier_Cap_Cam_16386', displayName: 'Loading Bay',     hls_url: '/hls/CAM-A07/stream.m3u8', ready: false },
   ]
 
   const filtered = search.trim()
     ? slots.filter(c =>
         c.id.toLowerCase().includes(search.toLowerCase()) ||
-        (c.name || '').toLowerCase().includes(search.toLowerCase())
+        (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+        (c.displayName || '').toLowerCase().includes(search.toLowerCase())
       )
     : slots
 
@@ -356,7 +350,6 @@ export default function CameraGrid({ cameras = [], theme = 'dark', onCamSelect }
   const { cols, cW, cH } = computeLayout(n, W)
   const totalRows  = Math.ceil(n / cols)
   const needsScroll = totalRows > ROWS_VISIBLE
-  // visible area height: 2 rows + gap between them + 4px padding
   const visibleH = ROWS_VISIBLE * cH + (ROWS_VISIBLE - 1) * GAP + 4
 
   return (
@@ -411,7 +404,7 @@ export default function CameraGrid({ cameras = [], theme = 'dark', onCamSelect }
                     className="cam-btn"
                     style={{ width: cW, height: cH }}
                     onClick={() => { setZoomedCam(cam); onCamSelect?.(cam) }}
-                    title={`${cam.id}${cam.name ? ' — ' + cam.name : ''} · click to expand`}
+                    title={`${cam.id}${cam.displayName ? ' — ' + cam.displayName : ''} · click to expand`}
                   >
                     <CamVideo cam={cam} />
                     <div className="cam-btn-top">
@@ -420,11 +413,14 @@ export default function CameraGrid({ cameras = [], theme = 'dark', onCamSelect }
                         {cam.ready ? '● REC' : '○ WAIT'}
                       </span>
                     </div>
-                    {cam.name && (
+                    {cam.displayName && (
                       <div className="cam-btn-bottom">
-                        <span className="cam-name-label">{cam.name}</span>
+                        <span className="cam-name-label">{cam.displayName}</span>
                       </div>
                     )}
+                    {/* FIX: pass cam.name (MongoDB key e.g. "Pier_Cap_Cam_16389")
+                             NOT cam.id (display label e.g. "CAM-A01")           */}
+                    <ZoneOverlay cameraName={cam.name} />
                     <span className="cam-expand-hint">⤢ expand</span>
                   </div>
                 ))}
