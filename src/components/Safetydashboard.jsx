@@ -230,19 +230,36 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
     setIsLoading(true)
 
     // Build optional camera query param (skip if camera ID contains a comma — multi-cam scope)
-    const camId    = selectedCamera?.db_id || selectedCamera?.id || null
-    const camParam = camId && !camId.includes(',') ? `&camera=${encodeURIComponent(camId)}` : ''
-    const params   = new URLSearchParams({ date: selectedDate, shift: selectedShift })
+    // Build optional camera query param
+const camId    = selectedCamera?.db_id || selectedCamera?.id || null
+const camParam = camId && !camId.includes(',') ? `&camera=${encodeURIComponent(camId)}` : ''
+
+// Build location filter param: when a location is selected (no specific camera),
+// collect all db_ids from every camera in that location and send as comma-separated list
+const locationParam = (() => {
+  if (camId || !selectedLocation) return ''   // camera already set, or nothing selected
+  const allCams = [
+    ...(selectedLocation.cameras || []),
+    ...(selectedLocation.subLocations?.flatMap(s => s.cameras) || []),
+  ]
+  const dbIds = [...new Set(allCams.map(c => c.db_id || c.id).filter(Boolean))]
+  return dbIds.length > 0 ? `&camera=${encodeURIComponent(dbIds.join(','))}` : ''
+})()
+
+// Only one of camParam / locationParam will be non-empty at a time
+const filterParam = camParam || locationParam
+
+const params = new URLSearchParams({ date: selectedDate, shift: selectedShift })
 
     // ── Parallel API requests ───────────────────────────────────────────
     const requests = [
-      fetch(`/api/hourly-trend?${params}${camParam}`).then(r => r.ok ? r.json() : []),          // [0] hourly trend
-      fetch(`/api/minute-trend?${params}${camParam}`).then(r => r.ok ? r.json() : []),           // [1] per-minute trend
-      fetch(`/api/ppe-compliance-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : {}),  // [2] helmet/vest %
-      fetch(`/api/safe-workers-7day?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : []),       // [3] 7-day rolling
-      fetch(`/api/shift-safe-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : {}),      // [4] per-shift counts
-      fetch(`/api/camera-safe-summary?date=${selectedDate}${camParam}`).then(r => r.ok ? r.json() : []),     // [5] per-camera counts
-    ]
+  fetch(`/api/hourly-trend?${params}${filterParam}`).then(r => r.ok ? r.json() : []),
+  fetch(`/api/minute-trend?${params}${filterParam}`).then(r => r.ok ? r.json() : []),
+  fetch(`/api/ppe-compliance-summary?date=${selectedDate}${filterParam}`).then(r => r.ok ? r.json() : {}),
+  fetch(`/api/safe-workers-7day?date=${selectedDate}${filterParam}`).then(r => r.ok ? r.json() : []),
+  fetch(`/api/shift-safe-summary?date=${selectedDate}${filterParam}`).then(r => r.ok ? r.json() : {}),
+  fetch(`/api/camera-safe-summary?date=${selectedDate}${filterParam}`).then(r => r.ok ? r.json() : []),
+]
 
     Promise.all(requests)
       .then(([trendRaw, minuteRaw, complianceRaw, safeRaw, shiftRaw, cameraRaw]) => {
@@ -282,7 +299,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
         setCameraSafe([])
         setIsLoading(false)
       })
-  }, [selectedDate, selectedShift, selectedCamera])
+  }, [selectedDate, selectedShift, selectedCamera, selectedLocation])
 
   // =============================================================================
   // EFFECT: Build / rebuild the Chart.js line chart
@@ -454,7 +471,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
             grid:  { color: 'rgba(255,255,255,0.04)' },
             title: {
               display: true,
-              text:    isMinuteMode ? 'count (per minute)' : 'count (peak per hour)',
+              text: isMinuteMode ? 'count (per minute)' : 'count (peak per hour)',
               color:   '#5a6a82',
               font:    { size: 11 },
             },
@@ -924,7 +941,7 @@ export default function SafetyDashboard({ selectedDate, onDateChange, alerts, kp
                   return (
                     <>
                       <span style={{ color: 'var(--green-safe)' }}>
-                        👷 Peak Safe/min: <strong>{minMaxSafe}</strong>
+                        👷 Peak Safe/min:<strong>{minMaxSafe}</strong>
                         <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>@ {minMaxSTime}</span>
                       </span>
                       <span style={{ color: 'var(--text-muted)' }}>|</span>
