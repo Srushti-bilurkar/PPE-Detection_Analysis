@@ -442,7 +442,8 @@ function DetailContent({ cardId, data, theme = 'dark' }) {
 }
 
 // ─── Alerts panel content ─────────────────────────────────────────────────────
-function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, selectedDate, trendData, selectedCamera, selectedLocation }) {
+// ─── Alerts panel content ─────────────────────────────────────────────────────
+function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, selectedDate, trendData, selectedCamera, selectedLocation, alertFilter, onAlertFilterChange }) {
   const hasAlerts  = visibleAlerts.length > 0
   const now        = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const scopeLabel = selectedLocation?.label || selectedCamera?.id || null
@@ -471,8 +472,32 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
         <div style={{ fontSize: 9, letterSpacing: '0.08em', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 600 }}>
           🔔 Active Alerts{scopeLabel ? ` · ${scopeLabel}` : ''}
         </div>
-        <div style={{ fontSize: 9, color: '#94a3b8' }}>Last checked {now}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 4, overflow: 'hidden' }}>
+            {[
+              { key: 'all',      label: 'All'      },
+              { key: 'critical', label: '🔴 Critical' },
+              { key: 'warning',  label: '🟡 Warning'  },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => onAlertFilterChange?.(key)}
+                style={{
+                  padding: '2px 8px', border: 'none', cursor: 'pointer', fontSize: 9,
+                  background: alertFilter === key ? 'rgba(255,255,255,0.15)' : 'transparent',
+                  color:      alertFilter === key ? '#fff' : '#94a3b8',
+                  borderRight: '1px solid rgba(255,255,255,0.08)',
+                  transition: 'background 0.15s',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 9, color: '#94a3b8' }}>Last checked {now}</div>
+        </div>
       </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, flexShrink: 0 }}>
         <div style={{ fontSize: 44, fontWeight: 700, color: hasAlerts ? '#ef4444' : '#22c984', lineHeight: 1 }}>{visibleAlerts.length}</div>
         <div>
@@ -485,14 +510,40 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
           </div>
         </div>
       </div>
+
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {hasAlerts ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {visibleAlerts.slice(0, 10).map(a => (
-              <div key={a._id} onClick={() => ackAlert(a._id)} style={{ background: a.severity === 'critical' ? '#2a0f0f' : '#2a1f0a', borderLeft: `3px solid ${a.severity === 'critical' ? '#e53e3e' : '#f59e0b'}`, borderRadius: 5, padding: '7px 10px', cursor: 'pointer' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: a.severity === 'critical' ? '#fca5a5' : '#fcd34d', marginBottom: 2 }}>{a.severity?.toUpperCase()} — {a.type?.replace('_', ' ')}</div>
-                <div style={{ fontSize: 9, color: '#94a3b8' }}>📹 {a.camera} · Worker {a.worker_id} · {new Date(a.timestamp).toLocaleTimeString()}</div>
-                <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 2, fontStyle: 'italic' }}>tap to acknowledge</div>
+              <div 
+                key={a._id} 
+                onClick={() => ackAlert(a._id)} 
+                style={{ 
+                  background: a.severity === 'critical' ? '#2a0f0f' : '#2a1f0a', 
+                  borderLeft: `3px solid ${a.severity === 'critical' ? '#e53e3e' : '#f59e0b'}`, 
+                  borderRadius: 5, 
+                  padding: '10px 12px', 
+                  cursor: 'pointer' 
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 700, color: a.severity === 'critical' ? '#fca5a5' : '#fcd34d', marginBottom: 4 }}>
+                  {a.severity?.toUpperCase()} — {a.type?.replace('_', ' ') || 'ppe violation'}
+                </div>
+
+                {/* ✅ LOCATION NAME INSTEAD OF "Invalid Date" */}
+                <div style={{ fontSize: 9, color: '#94a3b8', lineHeight: 1.4, marginBottom: 4 }}>
+                  <strong>{a.displayLocation || 'Unknown Location'}</strong> 
+                  {' • Worker '}
+                  {a.worker || a.worker_id || '—'}
+                </div>
+
+                <div style={{ fontSize: 9, color: '#94a3b8' }}>
+                  📹 {a.camera || a.camera_name || '—'}
+                </div>
+
+                <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>
+                  tap to acknowledge
+                </div>
               </div>
             ))}
           </div>
@@ -536,7 +587,6 @@ function AlertsPanelContent({ visibleAlerts = [], ackAlert, displayCompliance, s
     </div>
   )
 }
-
 // ─── Stat card ────────────────────────────────────────────────────────────────
 function StatCard({
   icon, label, subtitle, value, color, sub, cardId, onClick, isActive, compact,
@@ -829,6 +879,8 @@ export default function StatCardsPanel({
   compliancePrevDay,
   repeatViolators,
   isStreaming,
+  alertFilter,           
+  onAlertFilterChange,
   onRefreshLive,
   theme = 'dark',
 }) {
@@ -1461,13 +1513,15 @@ export default function StatCardsPanel({
           }}>
             <AlertsPanelContent
               visibleAlerts={visibleAlerts}
+              alertFilter={alertFilter}
+              onAlertFilterChange={onAlertFilterChange}
               ackAlert={ackAlert}
               displayCompliance={displayCompliance}
               selectedDate={selectedDate}
               trendData={trendData}
               selectedCamera={selectedCamera}
               selectedLocation={selectedLocation}
-            />
+            /> 
           </div>
         </div>
 

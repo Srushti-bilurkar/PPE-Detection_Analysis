@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 // ─────────────────────────────────────────────────────────────────────────────
 const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL)
   ? import.meta.env.VITE_API_URL
-  : 'http://localhost:3001'
+  : 'http://localhost:8000'     // ← Changed to 8000
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CSS
@@ -179,7 +179,7 @@ export default function ZoneOverlay({ cameraName, mode = 'cover', selectedDate =
   const [zoneData,     setZoneData]     = useState({})
   const [loading,      setLoading]      = useState(true)
   const [fetchError,   setFetchError]   = useState(null)
-  const [visible,      setVisible]      = useState(true)
+  const [visible,      setVisible]      = useState(false)
   const [view,         setView]         = useState('live')
   const [opacity,      setOpacity]      = useState(0.35)
   const [selectedZone, setSelectedZone] = useState(null)

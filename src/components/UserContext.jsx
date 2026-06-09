@@ -56,17 +56,17 @@ export const CAMERA_LOCATIONS = [
     id: 'bangalore', label: 'Bangalore', icon: '🏗️',
     cameras: [withName({
       id:      'CAM-A01',
-      db_id:   'Pier_Cap_Cam_16389',
-      hls_url: '/hls/CAM-A01/stream.m3u8',   // ← keep as CAM-A01
-      ready:   false,
+      db_id:   'Pier_Cap_Cam_16389',           // MongoDB name
+      hls_url: '/hls/Pier_Cap_Cam_16389/stream.m3u8',   // ← Updated
+      ready:   true,
     })],
   },
   {
     id: 'hyderabad', label: 'Hyderabad', icon: '🏢',
     cameras: Array.from({ length: 20 }, (_, i) => withName({
       id:      `CAM-HYD-${i + 1}`,
-      db_id:   'Pier_Cap_Cam_16388',
-      hls_url: '/hls/CAM-A02/stream.m3u8',   // ← keep as CAM-A02
+      db_id:   'Pier_Cap_Cam_16388',                    // MongoDB name
+      hls_url: '/hls/Pier_Cap_Cam_16388/stream.m3u8',   // ← Updated
       ready:   i === 0,
     })),
   },
@@ -78,7 +78,7 @@ export const CAMERA_LOCATIONS = [
         cameras: [withName({
           id:      'CAM-CHN-1',
           db_id:   'Pier_Cap_Cam_16387',
-          hls_url: '/hls/CAM-A03/stream.m3u8',  // ← keep as CAM-A03
+          hls_url: '/hls/Pier_Cap_Cam_16387/stream.m3u8',   // ← Updated
           ready:   true,
         })],
       },
@@ -87,7 +87,7 @@ export const CAMERA_LOCATIONS = [
         cameras: [withName({
           id:      'CAM-CHN-2',
           db_id:   'Pier_Cap_Cam_16386',
-          hls_url: '/hls/CAM-A07/stream.m3u8',  // ← keep as CAM-A07
+          hls_url: '/hls/Pier_Cap_Cam_16386/stream.m3u8',   // ← Updated
           ready:   false,
         })],
       },

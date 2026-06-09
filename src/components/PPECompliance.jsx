@@ -3,6 +3,15 @@ import { Chart, registerables } from 'chart.js'
 
 Chart.register(...registerables)
 
+// ── Location filter config ────────────────────────────────────────────────
+const LOCATIONS = [
+  { label: 'All Locations', value: '' },
+  { label: 'Bangalore',     value: 'Pier_Cap_Cam_16389' },
+  { label: 'Hyderabad',     value: 'Pier_Cap_Cam_16388' },
+  { label: 'Chennai L1',    value: 'Pier_Cap_Cam_16387' },
+  { label: 'Chennai L2',    value: 'Pier_Cap_Cam_16386' },
+]
+
 function toApiDate(dateStr) {
   if (!dateStr) return new Date().toISOString().split('T')[0]
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr
@@ -126,10 +135,8 @@ function ZoneLegend() {
 }
 
 /* ============================================================
-   WorkerViolationTrendChart — date / date-range / monthly / yearly
-   DEFAULT MODE: 'date' (single day hourly breakdown)
+   WorkerViolationTrendChart
    ============================================================ */
-
 const RANGE_MODES = [
   { key: 'date',    label: 'Date'       },
   { key: 'range',   label: 'Date Range' },
@@ -137,11 +144,10 @@ const RANGE_MODES = [
   { key: 'yearly',  label: 'Yearly'     },
 ]
 
-function WorkerViolationTrendChart() {
+function WorkerViolationTrendChart({ selectedLocation = '' }) {
   const today        = new Date().toISOString().split('T')[0]
   const firstOfMonth = today.slice(0, 8) + '01'
 
-  // ── DEFAULT MODE IS 'date' ──
   const [mode,       setMode]       = useState('date')
   const [singleDate, setSingleDate] = useState(today)
   const [rangeFrom,  setRangeFrom]  = useState(firstOfMonth)
@@ -154,23 +160,25 @@ function WorkerViolationTrendChart() {
   const [peakWorkers,    setPeakWorkers]    = useState(null)
   const [peakViolations, setPeakViolations] = useState(null)
   const [totals,         setTotals]         = useState({ workers: 0, violations: 0 })
-  const [showTotal,      setShowTotal]      = useState(true)
   const [showWorkers,    setShowWorkers]    = useState(true)
   const [showViols,      setShowViols]      = useState(true)
 
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
 
+  const camParam = selectedLocation ? `&camera=${encodeURIComponent(selectedLocation)}` : ''
+
   /* ── fetch trend data ── */
   const loadTrend = useCallback(async () => {
     setLoading(true)
+    const cp = selectedLocation ? `&camera=${encodeURIComponent(selectedLocation)}` : ''
     try {
 
-      /* ── DATE mode: single day, hourly breakdown ── */
+      /* ── DATE mode ── */
       if (mode === 'date') {
         const apiDate = toApiDate(singleDate)
         try {
-          const r = await fetch(`/api/hourly-trend?date=${apiDate}&shift=both`)
+          const r = await fetch(`/api/hourly-trend?date=${apiDate}&shift=both${cp}`)
           if (!r.ok) { setTrendData([]); setLoading(false); return }
           const raw = await r.json()
           const points = (Array.isArray(raw) ? raw : []).map(d => ({
@@ -186,7 +194,7 @@ function WorkerViolationTrendChart() {
         return
       }
 
-      /* ── RANGE / MONTHLY mode: one point per day ── */
+      /* ── RANGE / MONTHLY mode ── */
       if (mode === 'range' || mode === 'monthly') {
         const from = mode === 'monthly' ? `${month}-01` : rangeFrom
         const to   = mode === 'monthly'
@@ -208,7 +216,7 @@ function WorkerViolationTrendChart() {
         const points = await Promise.all(
           cappedDays.map(async (day) => {
             try {
-              const r = await fetch(`/api/kpi-period?date_from=${day}&date_to=${day}`)
+              const r = await fetch(`/api/kpi-period?date_from=${day}&date_to=${day}${cp}`)
               if (!r.ok) return { label: day, total_workers: 0, violations: 0 }
               const d = await r.json()
               return {
@@ -223,7 +231,7 @@ function WorkerViolationTrendChart() {
         )
         setTrendData(points.filter(p => p.total_workers > 0 || p.violations > 0))
 
-      /* ── YEARLY mode: one point per month ── */
+      /* ── YEARLY mode ── */
       } else {
         const MONTHS  = ['01','02','03','04','05','06','07','08','09','10','11','12']
         const MLABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -242,7 +250,7 @@ function WorkerViolationTrendChart() {
               : new Date(parseInt(year), monthNum, 0).toISOString().split('T')[0]
 
             try {
-              const r = await fetch(`/api/kpi-period?date_from=${from}&date_to=${lastDay}`)
+              const r = await fetch(`/api/kpi-period?date_from=${from}&date_to=${lastDay}${cp}`)
               if (!r.ok) return { label: `${MLABELS[idx]} ${year}`, total_workers: 0, violations: 0 }
               const d = await r.json()
               return {
@@ -263,16 +271,15 @@ function WorkerViolationTrendChart() {
       setTrendData([])
     }
     setLoading(false)
-  }, [mode, singleDate, rangeFrom, rangeTo, month, year])
+  }, [mode, singleDate, rangeFrom, rangeTo, month, year, selectedLocation])
 
-  /* ── auto-reload whenever any dependency changes ── */
+  /* ── auto-reload ── */
   useEffect(() => { loadTrend() }, [loadTrend])
 
   /* ── compute peak / totals ── */
   useEffect(() => {
     if (!trendData.length) {
-      setPeakWorkers(null)
-      setPeakViolations(null)
+      setPeakWorkers(null); setPeakViolations(null)
       setTotals({ workers: 0, violations: 0 })
       return
     }
@@ -280,12 +287,11 @@ function WorkerViolationTrendChart() {
     const maxV = trendData.reduce((m, d) => d.violations    > (m?.v ?? 0) ? { v: d.violations,    l: d.label } : m, null)
     const sumW = trendData.reduce((s, d) => s + (d.total_workers ?? 0), 0)
     const sumV = trendData.reduce((s, d) => s + (d.violations    ?? 0), 0)
-    setPeakWorkers(maxW)
-    setPeakViolations(maxV)
+    setPeakWorkers(maxW); setPeakViolations(maxV)
     setTotals({ workers: sumW, violations: sumV })
   }, [trendData])
 
-  /* ── draw / update chart ── */
+  /* ── draw chart ── */
   useEffect(() => {
     const ctx = canvasRef.current
     if (!ctx) return
@@ -297,111 +303,104 @@ function WorkerViolationTrendChart() {
     const violVals   = trendData.map(d => d.violations    ?? 0)
 
     chartRef.current = new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels,
-    datasets: [
-      showWorkers && {
-        label:            'Safe Workers',
-        data:             workerVals,
-        borderColor:      'rgba(29,200,130,1)',
-        backgroundColor:  'rgba(29,200,130,0.10)',
-        borderWidth:      2.5,
-        pointRadius:      mode === 'date' ? 4 : 3,
-        pointHoverRadius: 6,
-        tension:          0.4,
-        fill:             true,
-      },
-      showViols && {
-        label:            'Violations',
-        data:             violVals,
-        borderColor:      'rgba(229,62,62,0.9)',
-        backgroundColor:  'rgba(229,62,62,0.07)',
-        borderWidth:      2,
-        borderDash:       [5, 3],
-        pointRadius:      mode === 'date' ? 4 : 3,
-        pointHoverRadius: 6,
-        tension:          0.4,
-        fill:             true,
-      },
-    ].filter(Boolean),
-  },
-  options: {
-    responsive:          true,
-    maintainAspectRatio: false,
-    interaction:         { mode: 'index', intersect: false },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: 'rgba(16,24,36,0.92)',
-        titleColor:      '#c8d4e8',
-        bodyColor:       '#8a9ab8',
-        borderColor:     'rgba(255,255,255,0.08)',
-        borderWidth:     1,
-        padding:         10,
-        callbacks: {
-          title: (items) => {
-            if (!items.length) return ''
-            const lbl = items[0].label
-            if (mode === 'date') {
-              const hour = parseInt(lbl.split(':')[0])
-              const next = String(hour + 1).padStart(2, '0')
-              return `${String(hour).padStart(2, '0')}:00 – ${next}:00`
-            }
-            return lbl
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          showWorkers && {
+            label:            'Safe Workers',
+            data:             workerVals,
+            borderColor:      'rgba(29,200,130,1)',
+            backgroundColor:  'rgba(29,200,130,0.10)',
+            borderWidth:      2.5,
+            pointRadius:      mode === 'date' ? 4 : 3,
+            pointHoverRadius: 6,
+            tension:          0.4,
+            fill:             true,
           },
-          label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
-        },
+          showViols && {
+            label:            'Violations',
+            data:             violVals,
+            borderColor:      'rgba(229,62,62,0.9)',
+            backgroundColor:  'rgba(229,62,62,0.07)',
+            borderWidth:      2,
+            borderDash:       [5, 3],
+            pointRadius:      mode === 'date' ? 4 : 3,
+            pointHoverRadius: 6,
+            tension:          0.4,
+            fill:             true,
+          },
+        ].filter(Boolean),
       },
-    },
-    scales: {
-      x: {
-        ticks: {
-          color:         '#666f82',
-          font:          { size: 10 },
-          maxTicksLimit: mode === 'date' ? 24 : 12,
-          autoSkip:      true,
-          callback: function(_, index) {
-            const lbl = labels[index]
-            if (!lbl) return null
-            if (mode === 'date') return parseInt(lbl.split(':')[0])
-            return lbl
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(16,24,36,0.92)',
+            titleColor:      '#c8d4e8',
+            bodyColor:       '#8a9ab8',
+            borderColor:     'rgba(255,255,255,0.08)',
+            borderWidth:     1,
+            padding:         10,
+            callbacks: {
+              title: (items) => {
+                if (!items.length) return ''
+                const lbl = items[0].label
+                if (mode === 'date') {
+                  const hour = parseInt(lbl.split(':')[0])
+                  const next = String(hour + 1).padStart(2, '0')
+                  return `${String(hour).padStart(2, '00')}:00 – ${next}:00`
+                }
+                return lbl
+              },
+              label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
+            },
           },
         },
-        grid:  { color: 'rgba(255,255,255,0.04)' },
-        title: {
-          display: true,
-          text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
-          color:   '#5a6a82',
-          font:    { size: 10 },
+        scales: {
+          x: {
+            ticks: {
+              color: '#666f82', font: { size: 10 },
+              maxTicksLimit: mode === 'date' ? 24 : 12,
+              autoSkip: true,
+              callback: function(_, index) {
+                const lbl = labels[index]
+                if (!lbl) return null
+                if (mode === 'date') return parseInt(lbl.split(':')[0])
+                return lbl
+              },
+            },
+            grid:  { color: 'rgba(255,255,255,0.04)' },
+            title: {
+              display: true,
+              text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
+              color:   '#5a6a82', font: { size: 10 },
+            },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: '#666f82', font: { size: 10 },
+              callback: (val) => Number.isInteger(val) ? val : null,
+            },
+            grid:  { color: 'rgba(255,255,255,0.04)' },
+            title: {
+              display: true,
+              text:    mode === 'date' ? 'count (per hour)' : 'count',
+              color:   '#4a5a72', font: { size: 10 },
+            },
+          },
         },
       },
-      y: {
-        beginAtZero: true,
-        ticks: {
-          color: '#666f82',
-          font:  { size: 10 },
-          callback: (val) => Number.isInteger(val) ? val : null,
-        },
-        grid:  { color: 'rgba(255,255,255,0.04)' },
-        title: {
-          display: true,
-          text:    mode === 'date' ? 'count (per hour)' : 'count',
-          color:   '#4a5a72',
-          font:    { size: 10 },
-        },
-      },
-    },
-  },
-})
+    })
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
   }, [trendData, showWorkers, showViols, mode])
 
-  /* ── year options ── */
   const currentYear = parseInt(today.slice(0, 4))
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
 
-  /* ── subtitle text ── */
   const subtitle = (() => {
     const pts = trendData.length > 0 ? ` · ${trendData.length} data point${trendData.length > 1 ? 's' : ''}` : ''
     if (mode === 'date')    return `Hourly · ${singleDate}${pts}`
@@ -413,80 +412,54 @@ function WorkerViolationTrendChart() {
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      {/* ── header ── */}
       <div className="panel-header">
         <div className="panel-title">📈 Safe Workers vs Violations — Trend</div>
         <div className="panel-subtitle">{subtitle}</div>
       </div>
 
       <div className="panel-body">
-
         {/* ── controls row ── */}
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 12 }}>
 
           {/* mode toggle */}
           <div style={{ display: 'flex', gap: 2, background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 3 }}>
             {RANGE_MODES.map(m => (
-              <button
-                key={m.key}
-                onClick={() => setMode(m.key)}
-                style={{
-                  padding:    '4px 12px',
-                  borderRadius: 4,
-                  border:     'none',
-                  cursor:     'pointer',
-                  fontSize:   11,
-                  fontWeight: mode === m.key ? 600 : 400,
-                  background: mode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
-                  color:      mode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
-                  transition: 'all 0.15s',
-                }}
-              >
+              <button key={m.key} onClick={() => setMode(m.key)} style={{
+                padding: '4px 12px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                fontSize: 11, fontWeight: mode === m.key ? 600 : 400,
+                background: mode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
+                color:      mode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
+                transition: 'all 0.15s',
+              }}>
                 {m.label}
               </button>
             ))}
           </div>
 
-          {/* Date mode: single date picker */}
+          {/* Date mode */}
           {mode === 'date' && (
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
               📅 Date
-              <input
-                type="date"
-                className="date-picker"
-                value={singleDate}
-                max={today}
-                onChange={e => setSingleDate(e.target.value)}
-                style={{ marginLeft: 4 }}
-              />
+              <input type="date" className="date-picker" value={singleDate} max={today}
+                onChange={e => setSingleDate(e.target.value)} style={{ marginLeft: 4 }} />
               {singleDate === today && (
-                <span style={{ fontSize: 10, color: 'rgba(29,200,130,1)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
-                  TODAY
-                </span>
+                <span style={{ fontSize: 10, color: 'rgba(29,200,130,1)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>TODAY</span>
               )}
             </label>
           )}
 
-          {/* Date Range mode */}
+          {/* Range mode */}
           {mode === 'range' && (
             <>
               <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
                 From
-                <input
-                  type="date" className="date-picker"
-                  value={rangeFrom} max={rangeTo}
-                  onChange={e => setRangeFrom(e.target.value)}
-                  style={{ marginLeft: 4 }}
-                />
+                <input type="date" className="date-picker" value={rangeFrom} max={rangeTo}
+                  onChange={e => setRangeFrom(e.target.value)} style={{ marginLeft: 4 }} />
               </label>
               <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
                 To
-                <input
-                  type="date" className="date-picker"
-                  value={rangeTo} min={rangeFrom} max={today}
-                  onChange={e => setRangeTo(e.target.value)}
-                  style={{ marginLeft: 4 }}
-                />
+                <input type="date" className="date-picker" value={rangeTo} min={rangeFrom} max={today}
+                  onChange={e => setRangeTo(e.target.value)} style={{ marginLeft: 4 }} />
               </label>
             </>
           )}
@@ -495,12 +468,8 @@ function WorkerViolationTrendChart() {
           {mode === 'monthly' && (
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
               Month
-              <input
-                type="month" className="date-picker"
-                value={month} max={today.slice(0, 7)}
-                onChange={e => setMonth(e.target.value)}
-                style={{ marginLeft: 4 }}
-              />
+              <input type="month" className="date-picker" value={month} max={today.slice(0, 7)}
+                onChange={e => setMonth(e.target.value)} style={{ marginLeft: 4 }} />
             </label>
           )}
 
@@ -508,61 +477,36 @@ function WorkerViolationTrendChart() {
           {mode === 'yearly' && (
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
               Year
-              <select
-                className="date-picker" value={year}
-                onChange={e => setYear(e.target.value)}
-                style={{ marginLeft: 4 }}
-              >
-                {yearOptions.map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
+              <select className="date-picker" value={year} onChange={e => setYear(e.target.value)} style={{ marginLeft: 4 }}>
+                {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </label>
           )}
 
           {/* Checkboxes */}
           <div style={{
-            display:    'flex',
-            alignItems: 'center',
-            gap:        10,
-            padding:    '4px 10px',
-            border:     '1px solid var(--border)',
-            borderRadius: 4,
-            background: 'var(--bg-panel)',
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '4px 10px', border: '1px solid var(--border)',
+            borderRadius: 4, background: 'var(--bg-panel)',
           }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(29,200,130,1)', cursor: 'pointer', userSelect: 'none' }}>
-              <input
-                type="checkbox" checked={showWorkers}
-                onChange={e => setShowWorkers(e.target.checked)}
-                style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }}
-              />
+              <input type="checkbox" checked={showWorkers} onChange={e => setShowWorkers(e.target.checked)}
+                style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }} />
               Safe Workers
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(229,62,62,0.9)', cursor: 'pointer', userSelect: 'none' }}>
-              <input
-                type="checkbox" checked={showViols}
-                onChange={e => setShowViols(e.target.checked)}
-                style={{ accentColor: 'rgba(229,62,62,0.9)', cursor: 'pointer', width: 13, height: 13 }}
-              />
+              <input type="checkbox" checked={showViols} onChange={e => setShowViols(e.target.checked)}
+                style={{ accentColor: 'rgba(229,62,62,0.9)', cursor: 'pointer', width: 13, height: 13 }} />
               Violations
             </label>
           </div>
 
-          {/* Refresh button */}
-          <button
-            onClick={loadTrend}
-            disabled={loading}
-            style={{
-              marginLeft:   'auto',
-              background:   'var(--bg-base)',
-              border:       '1px solid var(--border)',
-              borderRadius: 4,
-              color:        'var(--text-muted)',
-              padding:      '3px 10px',
-              fontSize:     11,
-              cursor:       loading ? 'not-allowed' : 'pointer',
-            }}
-          >
+          {/* Refresh */}
+          <button onClick={loadTrend} disabled={loading} style={{
+            marginLeft: 'auto', background: 'var(--bg-base)', border: '1px solid var(--border)',
+            borderRadius: 4, color: 'var(--text-muted)', padding: '3px 10px',
+            fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer',
+          }}>
             {loading ? '⏳' : '🔄'} Refresh
           </button>
         </div>
@@ -570,27 +514,17 @@ function WorkerViolationTrendChart() {
         {/* ── peak stats bar ── */}
         {!loading && peakWorkers && (
           <div style={{
-            display:      'flex',
-            flexWrap:     'wrap',
-            gap:          '6px 20px',
-            marginBottom: 10,
-            padding:      '8px 12px',
-            background:   'var(--bg-base)',
-            borderRadius: 6,
-            fontSize:     11,
-            color:        'var(--text-muted)',
+            display: 'flex', flexWrap: 'wrap', gap: '6px 20px', marginBottom: 10,
+            padding: '8px 12px', background: 'var(--bg-base)', borderRadius: 6,
+            fontSize: 11, color: 'var(--text-muted)',
           }}>
             <span>
-              👷 <strong style={{ color: 'rgba(29,200,130,0.95)' }}>
-                Peak Workers: {peakWorkers.v}
-              </strong>
+              👷 <strong style={{ color: 'rgba(29,200,130,0.95)' }}>Peak Workers: {peakWorkers.v}</strong>
               <span style={{ opacity: 0.6 }}> @ {peakWorkers.l}</span>
             </span>
             <span style={{ opacity: 0.4 }}>|</span>
             <span>
-              🚨 <strong style={{ color: 'rgba(229,62,62,0.9)' }}>
-                Peak Violations: {peakViolations?.v ?? 0}
-              </strong>
+              🚨 <strong style={{ color: 'rgba(229,62,62,0.9)' }}>Peak Violations: {peakViolations?.v ?? 0}</strong>
               <span style={{ opacity: 0.6 }}> @ {peakViolations?.l}</span>
             </span>
             <span style={{ opacity: 0.4 }}>|</span>
@@ -598,7 +532,6 @@ function WorkerViolationTrendChart() {
             <span style={{ opacity: 0.4 }}>|</span>
             <span style={{ opacity: 0.6 }}>Total Violations: <strong>{totals.violations}</strong></span>
           </div>
-          
         )}
 
         {/* ── chart canvas ── */}
@@ -615,7 +548,6 @@ function WorkerViolationTrendChart() {
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
           )}
         </div>
-
       </div>
     </div>
   )
@@ -623,22 +555,24 @@ function WorkerViolationTrendChart() {
 
 
 /* ============================================================
-   PPECompliance  (main export)
+   PPECompliance  — main export
    ============================================================ */
 export default function PPECompliance({ selectedDate, onDateChange }) {
   const today = new Date().toISOString().split('T')[0]
 
-  const [date,        setDate]        = useState(toApiDate(selectedDate) || today)
-  const [loading,     setLoading]     = useState(false)
-  const [zoneLoading, setZoneLoading] = useState(false)
-  const [error,       setError]       = useState(null)
-  const [zoneData,    setZoneData]    = useState([])
+  const [date,             setDate]             = useState(toApiDate(selectedDate) || today)
+  const [selectedLocation, setSelectedLocation] = useState('')
+  const [loading,          setLoading]          = useState(false)
+  const [zoneLoading,      setZoneLoading]      = useState(false)
+  const [error,            setError]            = useState(null)
+  const [zoneData,         setZoneData]         = useState([])
 
   const [totalViolations, setTotalViolations] = useState(0)
   const [onlyHelmetMiss,  setOnlyHelmetMiss]  = useState(0)
   const [onlyVestMiss,    setOnlyVestMiss]    = useState(0)
   const [bothMiss,        setBothMiss]        = useState(0)
 
+  // Sync date from parent
   useEffect(() => {
     if (selectedDate) {
       const normalised = toApiDate(selectedDate)
@@ -646,10 +580,10 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
     }
   }, [selectedDate])
 
-  const loadZoneData = useCallback(async (apiDate, violationRows) => {
+  const loadZoneData = useCallback(async (apiDate, violationRows, camParam) => {
     setZoneLoading(true)
     try {
-      const res = await fetch(`/api/ppe-compliance-by-zone?date=${apiDate}`)
+      const res = await fetch(`/api/ppe-compliance-by-zone?date=${apiDate}${camParam}`)
       if (res.ok) {
         const data = await res.json()
         if (Array.isArray(data) && data.length > 0) {
@@ -660,6 +594,7 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
       }
     } catch (_) { /* fall through */ }
 
+    // Fallback: build from violation rows
     if (violationRows && violationRows.length > 0) {
       const map = {}
       violationRows.forEach(r => {
@@ -683,42 +618,32 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
   }, [])
 
   const loadStats = useCallback(async (d) => {
-    const apiDate = toApiDate(d)
+    const apiDate  = toApiDate(d)
+    const camParam = selectedLocation ? `&camera=${encodeURIComponent(selectedLocation)}` : ''
+
     setLoading(true)
     setError(null)
 
     try {
-      const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=5000`)
+      const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=5000${camParam}`)
       if (!workerRes.ok) throw new Error('Failed to load violations')
       const rawViolations = await workerRes.json()
 
       if (Array.isArray(rawViolations)) {
-      // Count directly from violation_type — no deduplication
-      const total = rawViolations.length
+        const total = rawViolations.length
+        const hOnly = rawViolations.filter(r => r.violation_type === 'no_helmet').length
+        const vOnly = rawViolations.filter(r => r.violation_type === 'no_vest').length
+        const both  = rawViolations.filter(r => r.violation_type === 'both_missing').length
 
-      const hOnly = rawViolations.filter(r =>
-        r.violation_type === 'no_helmet'
-      ).length
+        setTotalViolations(total)
+        setOnlyHelmetMiss(hOnly)
+        setOnlyVestMiss(vOnly)
+        setBothMiss(both)
 
-      const vOnly = rawViolations.filter(r =>
-        r.violation_type === 'no_vest'
-      ).length
-
-      const both = rawViolations.filter(r =>
-        r.violation_type === 'both_missing'
-      ).length
-
-      setTotalViolations(total)
-      setOnlyHelmetMiss(hOnly)
-      setOnlyVestMiss(vOnly)
-      setBothMiss(both)
-
-      await loadZoneData(apiDate, rawViolations)
+        await loadZoneData(apiDate, rawViolations, camParam)
       } else {
-        setTotalViolations(0)
-        setOnlyHelmetMiss(0)
-        setOnlyVestMiss(0)
-        setBothMiss(0)
+        setTotalViolations(0); setOnlyHelmetMiss(0)
+        setOnlyVestMiss(0);    setBothMiss(0)
         setZoneData([])
       }
     } catch (err) {
@@ -726,9 +651,10 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
     }
 
     setLoading(false)
-  }, [loadZoneData])
+  }, [selectedLocation, loadZoneData])
 
-  useEffect(() => { loadStats(date) }, [date, loadStats])
+  // Reload when date OR location changes
+  useEffect(() => { loadStats(date) }, [date, selectedLocation, loadStats])
 
   const handleDateChange = (e) => {
     const d = e.target.value
@@ -738,29 +664,84 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
 
   const pct = (n) => totalViolations > 0 ? Math.round((n / totalViolations) * 100) : 0
 
+  // Location label for display
+  const locationLabel = LOCATIONS.find(l => l.value === selectedLocation)?.label || 'All Locations'
+
   return (
     <div>
 
-      {/* ── Date picker bar ── */}
-      <div className="date-bar">
+      {/* ── Filter bar ── */}
+      <div className="date-bar" style={{ flexWrap: 'wrap', gap: 10 }}>
+
+        {/* Date picker */}
         <span className="date-bar-label">📅 Viewing data for:</span>
         <input
           type="date" className="date-picker"
           value={date} onChange={handleDateChange} max={today}
         />
-        <span className="date-bar-hint">← change date to update compliance data</span>
+
+        {/* Divider */}
+        <span style={{ color: 'var(--border)', fontSize: 16, userSelect: 'none', margin: '0 2px' }}>|</span>
+
+        {/* Location filter */}
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          📍 Location:
+        </span>
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <select
+            value={selectedLocation}
+            onChange={e => setSelectedLocation(e.target.value)}
+            style={{
+              background:   'var(--bg-panel)',
+              border:       `1px solid ${selectedLocation ? 'rgba(99,102,241,0.5)' : 'var(--border)'}`,
+              borderRadius: 6,
+              color:        selectedLocation ? '#a5b4fc' : 'var(--text-primary)',
+              padding:      '4px 36px 4px 12px',
+              fontSize:     12,
+              cursor:       'pointer',
+              fontWeight:   selectedLocation ? 600 : 400,
+              appearance:   'none',
+              outline:      'none',
+              transition:   'border-color 0.15s',
+            }}
+          >
+            {LOCATIONS.map(loc => (
+              <option key={loc.value} value={loc.value}
+                style={{ background: '#1e293b', color: '#e2e8f0' }}>
+                {loc.label}
+              </option>
+            ))}
+          </select>
+          <span style={{
+            position: 'absolute', right: 8, top: '50%',
+            transform: 'translateY(-50%)', pointerEvents: 'none',
+            color: 'var(--text-muted)', fontSize: 25,
+          }}>▾</span>
+        </div>
+
+        {/* Active filter badge */}
+        {selectedLocation && (
+        <button
+          onClick={() => setSelectedLocation('')}
+          style={{
+            background: 'none', border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 5, color: '#64748b', cursor: 'pointer',
+            fontSize: 11, padding: '2px 8px', lineHeight: 1.6,
+          }}
+        >
+          ✕ Show all
+        </button>
+      )}
+
+        {/* Refresh */}
         <button
           onClick={() => loadStats(date)}
           disabled={loading}
           style={{
-            marginLeft:   8,
-            background:   'var(--bg-base)',
-            border:       '1px solid var(--border)',
-            borderRadius: 4,
-            color:        'var(--text-muted)',
-            padding:      '3px 10px',
-            fontSize:     11,
-            cursor:       loading ? 'not-allowed' : 'pointer',
+            marginLeft: 'auto', background: 'var(--bg-base)',
+            border: '1px solid var(--border)', borderRadius: 4,
+            color: 'var(--text-muted)', padding: '3px 10px',
+            fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer',
           }}
         >
           {loading ? '⏳' : '🔄'} Refresh
@@ -770,13 +751,9 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
       {/* ── Error banner ── */}
       {error && (
         <div style={{
-          background:   'rgba(229,62,62,0.12)',
-          border:       '1px solid rgba(229,62,62,0.3)',
-          borderRadius: 6,
-          padding:      '10px 14px',
-          marginBottom: 12,
-          color:        'var(--red-alert)',
-          fontSize:     12,
+          background: 'rgba(229,62,62,0.12)', border: '1px solid rgba(229,62,62,0.3)',
+          borderRadius: 6, padding: '10px 14px', marginBottom: 12,
+          color: 'var(--red-alert)', fontSize: 12,
         }}>
           ⚠️ {error}
         </div>
@@ -791,7 +768,9 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
           <div className="stat-value red" style={{ fontSize: 26 }}>
             {loading ? '…' : totalViolations}
           </div>
-          <div className="stat-delta">workers with any PPE missing</div>
+          <div className="stat-delta">
+            {selectedLocation ? `${locationLabel} only` : 'workers with any PPE missing'}
+          </div>
         </div>
 
         <div className="stat-card amber">
@@ -829,14 +808,14 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
 
       </div>
 
-      {/* ── Zone-wise compliance bar chart ── */}
+      {/* ── Zone-wise compliance chart ── */}
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">📹 Zone-wise Compliance vs Non-Compliance — Per Camera</div>
           <div className="panel-subtitle">
             {zoneData.length > 0
-              ? `${zoneData.length} camera${zoneData.length > 1 ? 's' : ''} · ${date}`
-              : date}
+              ? `${zoneData.length} camera${zoneData.length > 1 ? 's' : ''} · ${date}${selectedLocation ? ` · ${locationLabel}` : ''}`
+              : `${date}${selectedLocation ? ` · ${locationLabel}` : ''}`}
           </div>
         </div>
         <div className="panel-body">
@@ -847,8 +826,8 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
         </div>
       </div>
 
-      {/* ── Worker vs Violations Trend chart ── */}
-      <WorkerViolationTrendChart />
+      {/* ── Trend chart — passes selectedLocation down ── */}
+      <WorkerViolationTrendChart selectedLocation={selectedLocation} />
 
     </div>
   )

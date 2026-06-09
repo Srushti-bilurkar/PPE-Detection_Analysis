@@ -39,7 +39,7 @@ load_dotenv()
 MONGO_URL  = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME    = os.getenv("DB_NAME",   "construction_monitor")
 
-YOLO_MODEL = r"C:\Users\srustib\Desktop\yolo-frontend\runs\runs\detect\ppe_model_final\weights\best.pt"
+YOLO_MODEL = r"C:\Users\varshas\Desktop\Yolo_intel\PPE-Detection_Analysis\runs\runs\detect\ppe_model_final\weights\best.pt"
 
 CAMERAS = [
     "Pier_Cap_Cam_16389",
