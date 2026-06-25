@@ -483,6 +483,8 @@ export default function Topbar({
   kpi      = {},
   zones    = [],
   siteName = 'Construction Site',
+  theme    = 'dark',
+  setTheme,
 }) {
   // ✅ FIX: useUser() moved inside the component body (was incorrectly at module level)
   const userCtx    = useUser()
@@ -490,7 +492,6 @@ export default function Topbar({
   const isAdmin     = userCtx?.isAdmin
 
   const [notifOpen,            setNotifOpen]            = useState(false)
-  const [lightMode,            setLightMode]            = useState(false)
   const [readIds,              setReadIds]              = useState(new Set())
   const [handovering,          setHandovering]          = useState(false)
   const [handoverOpen,         setHandoverOpen]         = useState(false)
@@ -521,9 +522,9 @@ export default function Topbar({
     setNotifOpen(v => !v)
   }
   function toggleTheme() {
-    const next = !lightMode
-    setLightMode(next)
-    document.body.classList.toggle('light-mode', next)
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme?.(next)
+    document.body.classList.toggle('light-mode', next === 'light')
   }
   function handleHandover() { setHandoverOpen(v => !v) }
 
@@ -781,7 +782,7 @@ export default function Topbar({
           {unread > 0 && <div id="notif-badge" style={{ display:'flex' }}>{unread}</div>}
         </button>
         <button className="topbar-btn" id="theme-toggle" onClick={toggleTheme}>
-          {lightMode ? '☀️ Light' : '🌙 Dark'}
+          {theme === 'light' ? '☀️ Light' : '🌙 Dark'}
         </button>
 
         {/* Handover button */}

@@ -1,0 +1,63 @@
+{
+  "admin": [
+    {
+      "id": "srushti",
+      "name": "Srushti",
+      "role": "admin",
+      "avatar": "SR",
+      "locations": [
+        "bangalore",
+        "hyderabad",
+        "chennai_1",
+        "chennai_2"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "varsha",
+      "name": "Varsha",
+      "role": "user",
+      "avatar": "VA",
+      "locations": [
+        "bangalore",
+        "hyderabad"
+      ]
+    },
+    {
+      "id": "pushpa",
+      "name": "Pushpa",
+      "role": "user",
+      "avatar": "PU",
+      "locations": [
+        "hyderabad"
+      ]
+    },
+    {
+      "id": "nitya",
+      "name": "Nitya",
+      "role": "user",
+      "avatar": "NI",
+      "locations": [
+        "bangalore"
+      ]
+    },
+    {
+      "id": "vaishnavi",
+      "name": "Vaishnavi",
+      "role": "user",
+      "avatar": "VA",
+      "locations": [
+        "bangalore",
+        "hyderabad"
+      ]
+    }
+  ],
+  "passwords": {
+    "srushti": "srushti123",
+    "varsha": "varsha123",
+    "pushpa": "pushpa123",
+    "nitya": "nitya123",
+    "vaishnavi": "vaishnavi123"
+  }
+}

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useState, useMemo, useEffect } from 'react'
 
 export const USERS = {
   admin: [
@@ -13,6 +13,13 @@ export const USERS = {
     { id: 'nitya',  name: 'Nitya',  role: 'user', avatar: 'NI',
       locations: ['bangalore'] },
   ],
+}
+
+const DEFAULT_PASSWORDS = {
+  srushti: 'srushti123',
+  varsha:  'varsha123',
+  pushpa:  'pushpa123',
+  nitya:   'nitya123',
 }
 
 const CAM_NAMES = {
@@ -41,8 +48,6 @@ const CAM_NAMES = {
   'CAM-CHN-2':  'Block B — Entry Gate',
 }
 
-// ── withName: sets displayName for UI and name = db_id for MongoDB/API calls ──
-// ✅ Fix — name = MongoDB key, displayName = UI label
 function withName(cam) {
   return {
     ...cam,
@@ -57,8 +62,8 @@ export const CAMERA_LOCATIONS = [
     cameras: [withName({
       id:      'CAM-A01',
       db_id:   'Pier_Cap_Cam_16389',
-      hls_url: '/hls/CAM-A01/stream.m3u8',   // ← keep as CAM-A01
-      ready:   false,
+      hls_url: '/hls/CAM-A01/stream.m3u8',
+      ready:   true,
     })],
   },
   {
@@ -66,7 +71,7 @@ export const CAMERA_LOCATIONS = [
     cameras: Array.from({ length: 20 }, (_, i) => withName({
       id:      `CAM-HYD-${i + 1}`,
       db_id:   'Pier_Cap_Cam_16388',
-      hls_url: '/hls/CAM-A02/stream.m3u8',   // ← keep as CAM-A02
+      hls_url: '/hls/CAM-A02/stream.m3u8',
       ready:   i === 0,
     })),
   },
@@ -78,7 +83,7 @@ export const CAMERA_LOCATIONS = [
         cameras: [withName({
           id:      'CAM-CHN-1',
           db_id:   'Pier_Cap_Cam_16387',
-          hls_url: '/hls/CAM-A03/stream.m3u8',  // ← keep as CAM-A03
+          hls_url: '/hls/CAM-A03/stream.m3u8',
           ready:   true,
         })],
       },
@@ -87,34 +92,96 @@ export const CAMERA_LOCATIONS = [
         cameras: [withName({
           id:      'CAM-CHN-2',
           db_id:   'Pier_Cap_Cam_16386',
-          hls_url: '/hls/CAM-A07/stream.m3u8',  // ← keep as CAM-A07
+          hls_url: '/hls/CAM-A07/stream.m3u8',
           ready:   false,
         })],
       },
     ],
   },
 ]
+
 export const ALL_LOCATION_IDS = ['bangalore', 'hyderabad', 'chennai_1', 'chennai_2']
+
+// ── Backend helpers ───────────────────────────────────────────────────────────
+function mergeList(defaults, saved) {
+  const base   = defaults.map(u => { const m = (saved || []).find(s => s.id === u.id); return m ? { ...u, ...m } : u })
+  const extras = (saved || []).filter(u => !defaults.find(d => d.id === u.id))
+  return [...base, ...extras]
+}
+
+async function saveToBackend(users, passwords) {
+  try {
+    await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        admin:     users.admin.map(u => ({ id: u.id, name: u.name, role: u.role, avatar: u.avatar, locations: u.locations })),
+        users:     users.users.map(u => ({ id: u.id, name: u.name, role: u.role, avatar: u.avatar, locations: u.locations })),
+        passwords,
+      }),
+    })
+  } catch (err) {
+    console.error('Failed to save users to backend:', err)
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const UserContext = createContext(null)
 
 export function UserProvider({ children }) {
-  const [currentUserId, setCurrentUserId] = useState('srushti')
+  const [currentUserId, setCurrentUserId] = useState(null)
   const [users, setUsers] = useState(USERS)
+  const [passwords, setPasswords] = useState(DEFAULT_PASSWORDS)
+
+  // Load from backend on mount
+  useEffect(() => {
+    fetch('/api/users')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return
+        setUsers({
+          admin: mergeList(USERS.admin, data.admin || []),
+          users: mergeList(USERS.users, data.users || []),
+        })
+        if (data.passwords) {
+          setPasswords(prev => ({ ...prev, ...data.passwords }))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const allUsers    = [...users.admin, ...users.users]
-  const currentUser = allUsers.find(u => u.id === currentUserId) || users.admin[0]
-  const isAdmin     = currentUser.role === 'admin'
+  const currentUser = currentUserId ? allUsers.find(u => u.id === currentUserId) ?? null : null
+  const isAdmin     = currentUser?.role === 'admin'
+  const isLoggedIn  = currentUser !== null
 
-  const visibleLocations = CAMERA_LOCATIONS.filter(loc => {
-    if (loc.subLocations) return loc.subLocations.some(sub => currentUser.locations.includes(sub.id))
-    return currentUser.locations.includes(loc.id)
-  }).map(loc => {
-    if (loc.subLocations) {
-      return { ...loc, subLocations: loc.subLocations.filter(sub => currentUser.locations.includes(sub.id)) }
-    }
-    return loc
-  })
+  const visibleLocations = useMemo(() => {
+    if (!currentUser) return []
+    const liveUser = allUsers.find(u => u.id === currentUser.id)
+    if (!liveUser) return []
+    return CAMERA_LOCATIONS
+      .filter(loc => {
+        if (loc.subLocations)
+          return loc.subLocations.some(sub => liveUser.locations.includes(sub.id))
+        return liveUser.locations.includes(loc.id)
+      })
+      .map(loc => {
+        if (loc.subLocations) {
+          return {
+            ...loc,
+            subLocations: loc.subLocations.filter(sub =>
+              liveUser.locations.includes(sub.id)
+            ),
+          }
+        }
+        return loc
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId, users])
+
+  const login = (user) => setCurrentUserId(user.id)
+  const logout = () => setCurrentUserId(null)
+  const setCurrentUser = (user) => setCurrentUserId(user.id)
 
   const toggleUserLocation = (userId, locationId) => {
     if (!isAdmin) return
@@ -122,20 +189,66 @@ export function UserProvider({ children }) {
       const update = list => list.map(u => {
         if (u.id !== userId) return u
         const has = u.locations.includes(locationId)
-        return { ...u, locations: has ? u.locations.filter(l => l !== locationId) : [...u.locations, locationId] }
+        return {
+          ...u,
+          locations: has
+            ? u.locations.filter(l => l !== locationId)
+            : [...u.locations, locationId],
+        }
       })
-      return { admin: update(prev.admin), users: update(prev.users) }
+      const next = { admin: update(prev.admin), users: update(prev.users) }
+      saveToBackend(next, passwords)
+      return next
     })
+  }
+
+  const deleteUser = (userId) => {
+    if (!isAdmin) return
+    setUsers(prev => {
+      const next = {
+        admin: prev.admin.filter(u => u.id !== userId),
+        users: prev.users.filter(u => u.id !== userId),
+      }
+      const nextPasswords = { ...passwords }
+      delete nextPasswords[userId]
+      saveToBackend(next, nextPasswords)
+      return next
+    })
+    setPasswords(prev => {
+      const next = { ...prev }
+      delete next[userId]
+      return next
+    })
+  }
+
+  const addUser = (newUser, password) => {
+    if (!isAdmin) return
+    setUsers(prev => {
+      const next = {
+        admin: newUser.role === 'admin' ? [...prev.admin, newUser] : prev.admin,
+        users: newUser.role === 'user'  ? [...prev.users, newUser] : prev.users,
+      }
+      const nextPasswords = { ...passwords, [newUser.id]: password }
+      saveToBackend(next, nextPasswords)
+      return next
+    })
+    setPasswords(prev => ({ ...prev, [newUser.id]: password }))
   }
 
   return (
     <UserContext.Provider value={{
       currentUser,
-      setCurrentUser: (user) => setCurrentUserId(user.id),
+      isLoggedIn,
       isAdmin,
       visibleLocations,
       users,
+      passwords,
+      login,
+      logout,
+      setCurrentUser,
       toggleUserLocation,
+      deleteUser,
+      addUser,
     }}>
       {children}
     </UserContext.Provider>

@@ -7,7 +7,7 @@ const TAB_CSS = `
 .loc-tab-bar {
   display: flex; gap: 6px; flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 .loc-tab-btn {
   display: flex; align-items: center; gap: 6px;
@@ -181,7 +181,6 @@ function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, on
     if (hasSubLocs) {
       const newId = isActive ? null : loc.id
       onSelect(newId)
-      // Only open popover when selecting, close when deselecting
       if (!isActive) {
         onTogglePopover(isPopoverOpen ? null : loc.id)
       } else {
@@ -219,7 +218,7 @@ function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, on
                 className={`loc-popover-item ${sub.id === activeSubId ? 'selected' : ''}`}
                 onClick={e => {
                   e.stopPropagation()
-                  onSelectSub(sub.id, loc.id)  // ← pass loc.id too
+                  onSelectSub(sub.id, loc.id)
                   onTogglePopover(null)
                 }}
               >
@@ -239,7 +238,7 @@ function LocationButton({ loc, cameras, activeId, activeSubId, popoverOpenId, on
 }
 
 /* ── Main ── */
-export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
+export default function LocationCameraPanel({ cameras = [], onCamSelect, kpiData = {} }) {
   injectLocCSS()
 
   const userContext = useUser()
@@ -256,6 +255,13 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
   const activeLoc = activeId ? visibleLocations.find(l => l.id === activeId) : null
   const activeSub = activeLoc?.subLocations?.find(s => s.id === activeSubId)
 
+  const currentKpi   = kpiData || {}
+  const safeWorkers  = currentKpi?.total_safe ?? 0
+  const totalWorkers = (currentKpi?.total_persons ?? 0) || (safeWorkers + (currentKpi?.total_violations ?? 0))
+  const workerStatusLabel = totalWorkers > 0
+    ? `${safeWorkers} safe persons · ${totalWorkers} total persons`
+    : null
+
   let visibleCams = []
   if (activeLoc) {
     if (activeLoc.subLocations) {
@@ -268,10 +274,12 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
 
   const showGrid = activeLoc && (!activeLoc.subLocations || activeSubId)
 
+  // ── The key trick: breadcrumb is OUTSIDE the sticky wrapper
+  //    so it scrolls away. Only the buttons row is sticky.
   return (
-    <div>
+    <div style={{ position: 'relative' }}>
 
-      {/* Breadcrumb */}
+      {/* Breadcrumb — scrolls normally */}
       <Breadcrumb
         locationLabel={activeLoc?.label}
         subLabel={activeSub?.label}
@@ -301,65 +309,101 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
         }}
       />
 
-      {/* Tab buttons */}
-      <div className="loc-tab-bar">
-        {visibleLocations
-          .filter(loc => isAdmin || !loc.adminOnly)
-          .map(loc => (
-            <LocationButton
-              key={loc.id}
-              loc={loc}
-              cameras={cameras}
-              activeId={activeId}
-              activeSubId={activeSubId}
-              popoverOpenId={popoverOpenId}
-              onSelect={id => {
-                setActiveId(id)
-                setActiveSubId(null)
-                setSelectedCam(null)
-                if (!id) {
-                  setPopoverOpenId(null)
-                  onCamSelect?.(null)
-                } else {
-                  const selected = visibleLocations.find(l => l.id === id)
-                  if (selected && !selected.subLocations) {
-                    const locCams = resolveCams(selected.cameras || [], cameras)
+      {/* ── STICKY BUTTONS ROW ─────────────────────────────────────
+          Only this div is sticky. background matches content-area
+          so content scrolling behind it is hidden cleanly.
+      ──────────────────────────────────────────────────────────── */}
+      <div style={{
+        position:   'sticky',
+        top:        0,
+        zIndex:     90,
+        background: 'var(--bg-base)',
+        paddingTop: 6,
+        paddingBottom: 6,
+        marginBottom: 12,
+      }}>
+        <div className="loc-tab-bar">
+          {visibleLocations
+            .filter(loc => isAdmin || !loc.adminOnly)
+            .map(loc => (
+              <LocationButton
+                key={loc.id}
+                loc={loc}
+                cameras={cameras}
+                activeId={activeId}
+                activeSubId={activeSubId}
+                popoverOpenId={popoverOpenId}
+                onSelect={id => {
+                  setActiveId(id)
+                  setActiveSubId(null)
+                  setSelectedCam(null)
+                  if (!id) {
+                    setPopoverOpenId(null)
+                    onCamSelect?.(null)
+                  } else {
+                    const selected = visibleLocations.find(l => l.id === id)
+                    if (selected && !selected.subLocations) {
+                      const locCams = resolveCams(selected.cameras || [], cameras)
+                      onCamSelect?.({
+                        id:          locCams.map(c => c.id).join(','),
+                        name:        selected.label,
+                        _isLocation: true,
+                      })
+                    } else if (selected && selected.subLocations) {
+                      const allSubCams = selected.subLocations.flatMap(s => resolveCams(s.cameras, cameras))
+                      onCamSelect?.({
+                        id:          allSubCams.map(c => c.id).join(','),
+                        name:        selected.label,
+                        _isLocation: true,
+                      })
+                    }
+                  }
+                }}
+                onSelectSub={(subId, parentLocId) => {
+                  setActiveSubId(subId)
+                  setActiveId(parentLocId)
+                  setSelectedCam(null)
+                  const parentLoc = visibleLocations.find(l => l.id === parentLocId)
+                  const sub       = parentLoc?.subLocations?.find(s => s.id === subId)
+                  if (sub) {
+                    const subCams = resolveCams(sub.cameras, cameras)
                     onCamSelect?.({
-                      id:          locCams.map(c => c.id).join(','),
-                      name:        selected.label,
-                      _isLocation: true,
-                    })
-                  } else if (selected && selected.subLocations) {
-                    const allSubCams = selected.subLocations.flatMap(s => resolveCams(s.cameras, cameras))
-                    onCamSelect?.({
-                      id:          allSubCams.map(c => c.id).join(','),
-                      name:        selected.label,
+                      id:          subCams.map(c => c.id).join(','),
+                      name:        sub.label,
                       _isLocation: true,
                     })
                   }
-                }
-              }}
-              onSelectSub={(subId, parentLocId) => {   // ← NOW receives parentLocId too
-                setActiveSubId(subId)
-                setActiveId(parentLocId)               // ← FIX: ensure activeId is set
-                setSelectedCam(null)
-                const parentLoc = visibleLocations.find(l => l.id === parentLocId)  // ← use parentLocId
-                const sub       = parentLoc?.subLocations?.find(s => s.id === subId)
-                if (sub) {
-                  const subCams = resolveCams(sub.cameras, cameras)
-                  onCamSelect?.({
-                    id:          subCams.map(c => c.id).join(','),
-                    name:        sub.label,
-                    _isLocation: true,
-                  })
-                }
-              }}
-              onTogglePopover={setPopoverOpenId}
-            />
-          ))}
+                }}
+                onTogglePopover={setPopoverOpenId}
+              />
+            ))}
+        </div>
       </div>
 
-      {/* Camera grid */}
+      {/* Worker status badge — shown when a location is selected */}
+      {activeLoc && (
+        <div style={{
+          marginBottom: 16,
+          padding: '6px 12px',
+          background: 'rgba(59,130,246,0.08)',
+          borderRadius: 6,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 12,
+          fontSize: 13.5,
+        }}>
+          <span style={{ color: '#93c5fd', fontWeight: 700 }}>
+            {activeSub ? activeSub.label : activeLoc.label}
+          </span>
+          {workerStatusLabel && (
+            <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 700 }}>
+              {workerStatusLabel}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Camera grid — expands below when a location is clicked */}
       {showGrid && (
         <CameraGrid
           key={`${activeId}-${activeSubId}`}
@@ -370,6 +414,7 @@ export default function LocationCameraPanel({ cameras = [], onCamSelect }) {
           }}
         />
       )}
+
     </div>
   )
 }

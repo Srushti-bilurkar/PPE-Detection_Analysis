@@ -3,6 +3,7 @@ import { Chart, registerables } from 'chart.js'
 
 Chart.register(...registerables)
 
+// ── date format helper ────────────────────────────────────────────────────
 function toApiDate(dateStr) {
   if (!dateStr) return new Date().toISOString().split('T')[0]
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr
@@ -13,9 +14,9 @@ function toApiDate(dateStr) {
   return dateStr
 }
 
-/* ============================================================
-   ZoneComplianceChart — per-camera grouped bar chart
-   ============================================================ */
+// ═══════════════════════════════════════════════════════════════════════════
+// ZONE COMPLIANCE CHART
+// ═══════════════════════════════════════════════════════════════════════════
 function ZoneComplianceChart({ zoneData, loading }) {
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
@@ -33,91 +34,51 @@ function ZoneComplianceChart({ zoneData, loading }) {
       data: {
         labels,
         datasets: [
-          {
-            label:           'Helmet — Compliance',
-            data:            zoneData.map(z => z.wearing_helmet ?? 0),
-            backgroundColor: 'rgba(29,158,117,0.70)',
-            borderColor:     'rgba(29,158,117,0.95)',
-            borderWidth: 1, borderRadius: 3,
-          },
-          {
-            label:           'Helmet — Non-Compliance',
-            data:            zoneData.map(z => z.not_wearing_helmet ?? 0),
-            backgroundColor: 'rgba(192,57,43,0.65)',
-            borderColor:     'rgba(192,57,43,0.90)',
-            borderWidth: 1, borderRadius: 3,
-          },
-          {
-            label:           'Vest — Compliance',
-            data:            zoneData.map(z => z.wearing_vest ?? 0),
-            backgroundColor: 'rgba(24,95,165,0.65)',
-            borderColor:     'rgba(24,95,165,0.90)',
-            borderWidth: 1, borderRadius: 3,
-          },
-          {
-            label:           'Vest — Non-Compliance',
-            data:            zoneData.map(z => z.not_wearing_vest ?? 0),
-            backgroundColor: 'rgba(186,117,23,0.65)',
-            borderColor:     'rgba(186,117,23,0.90)',
-            borderWidth: 1, borderRadius: 3,
-          },
+          { label:'Helmet — Compliance',     data:zoneData.map(z=>z.wearing_helmet??0),     backgroundColor:'rgba(29,158,117,0.70)', borderColor:'rgba(29,158,117,0.95)', borderWidth:1, borderRadius:3 },
+          { label:'Helmet — Non-Compliance', data:zoneData.map(z=>z.not_wearing_helmet??0), backgroundColor:'rgba(192,57,43,0.65)',  borderColor:'rgba(192,57,43,0.90)',  borderWidth:1, borderRadius:3 },
+          { label:'Vest — Compliance',       data:zoneData.map(z=>z.wearing_vest??0),       backgroundColor:'rgba(24,95,165,0.65)',  borderColor:'rgba(24,95,165,0.90)',  borderWidth:1, borderRadius:3 },
+          { label:'Vest — Non-Compliance',   data:zoneData.map(z=>z.not_wearing_vest??0),   backgroundColor:'rgba(186,117,23,0.65)', borderColor:'rgba(186,117,23,0.90)', borderWidth:1, borderRadius:3 },
         ],
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}`,
-            },
-          },
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{
+          legend:{ display:false },
+          tooltip:{
+            backgroundColor:'rgba(16,24,36,0.92)', titleColor:'#c8d4e8', bodyColor:'#8a9ab8',
+            borderColor:'rgba(255,255,255,0.08)', borderWidth:1, padding:10,
+            callbacks:{ label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}` }
+          }
         },
-        scales: {
-          x: {
-            ticks: { color: '#888780', font: { size: 11 }, autoSkip: false },
-            grid:  { color: 'rgba(255,255,255,0.04)' },
-          },
-          y: {
-            beginAtZero: true,
-            ticks: { color: '#888780', font: { size: 11 }, stepSize: 5 },
-            grid:  { color: 'rgba(255,255,255,0.04)' },
-            title: { display: true, text: 'count', color: '#5a6a82', font: { size: 11 } },
-          },
+        scales:{
+          x:{ ticks:{ color:'#888780', font:{ size:11 }, autoSkip:false }, grid:{ color:'rgba(255,255,255,0.04)' } },
+          y:{ beginAtZero:true, ticks:{ color:'#888780', font:{ size:11 }, stepSize:5 }, grid:{ color:'rgba(255,255,255,0.04)' }, title:{ display:true, text:'count', color:'#5a6a82', font:{ size:11 } } },
         },
       },
     })
+
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
   }, [zoneData])
 
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
-      Loading zone data…
-    </div>
-  )
-  if (!zoneData || zoneData.length === 0) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
-      No zone data for this date
-    </div>
-  )
-  return <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
+  if (loading) return <div style={{ display:'flex',alignItems:'center',justifyContent:'center',height:'100%',color:'var(--text-muted)',fontSize:13 }}>Loading zone data…</div>
+  if (!zoneData || zoneData.length === 0) return <div style={{ display:'flex',alignItems:'center',justifyContent:'center',height:'100%',color:'var(--text-muted)',fontSize:13 }}>No zone data for this date</div>
+  return <canvas ref={canvasRef} style={{ width:'100%', height:'100%' }} />
 }
 
-/* ── Zone chart legend ── */
 const ZONE_LEGEND = [
-  { label: 'Helmet — Compliance',     color: 'rgba(29,158,117,0.85)'  },
-  { label: 'Helmet — Non-Compliance', color: 'rgba(192,57,43,0.85)'   },
-  { label: 'Vest — Compliance',       color: 'rgba(24,95,165,0.85)'   },
-  { label: 'Vest — Non-Compliance',   color: 'rgba(186,117,23,0.85)'  },
+  { label:'Helmet — Compliance',     color:'rgba(29,158,117,0.85)' },
+  { label:'Helmet — Non-Compliance', color:'rgba(192,57,43,0.85)'  },
+  { label:'Vest — Compliance',       color:'rgba(24,95,165,0.85)'  },
+  { label:'Vest — Non-Compliance',   color:'rgba(186,117,23,0.85)' },
 ]
 
 function ZoneLegend() {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginBottom: 10 }}>
+    <div style={{ display:'flex', flexWrap:'wrap', gap:'8px 18px', marginBottom:10 }}>
       {ZONE_LEGEND.map(({ label, color }) => (
-        <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-          <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: color, flexShrink: 0 }} />
+        <span key={label} style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--text-muted)' }}>
+          <span style={{ display:'inline-block', width:10, height:10, borderRadius:2, background:color, flexShrink:0 }} />
           {label}
         </span>
       ))}
@@ -125,137 +86,100 @@ function ZoneLegend() {
   )
 }
 
-/* ============================================================
-   WorkerViolationTrendChart — date / date-range / monthly / yearly
-   DEFAULT MODE: 'date' (single day hourly breakdown)
-   ============================================================ */
-
+// ═══════════════════════════════════════════════════════════════════════════
+// RANGE MODES
+// ═══════════════════════════════════════════════════════════════════════════
 const RANGE_MODES = [
-  { key: 'date',    label: 'Date'       },
-  { key: 'range',   label: 'Date Range' },
-  { key: 'monthly', label: 'Monthly'    },
-  { key: 'yearly',  label: 'Yearly'     },
+  { key:'date',    label:'Date'       },
+  { key:'range',   label:'Date Range' },
+  { key:'monthly', label:'Monthly'    },
+  { key:'yearly',  label:'Yearly'     },
 ]
 
-function WorkerViolationTrendChart() {
-  const today        = new Date().toISOString().split('T')[0]
-  const firstOfMonth = today.slice(0, 8) + '01'
+// ═══════════════════════════════════════════════════════════════════════════
+// WORKER VIOLATION TREND CHART
+// ═══════════════════════════════════════════════════════════════════════════
+function WorkerViolationTrendChart({
+  selectedLocation = '',
+  trendMode, singleDate, rangeFrom, rangeTo, month, year,
+}) {
+  const [showTotalWorkers, setShowTotalWorkers] = useState(true)
+  const [showWorkers,      setShowWorkers]      = useState(true)
+  const [showNewViols,     setShowNewViols]     = useState(true)
+  const [showRepViols,     setShowRepViols]     = useState(true)
 
-  // ── DEFAULT MODE IS 'date' ──
-  const [mode,       setMode]       = useState('date')
-  const [singleDate, setSingleDate] = useState(today)
-  const [rangeFrom,  setRangeFrom]  = useState(firstOfMonth)
-  const [rangeTo,    setRangeTo]    = useState(today)
-  const [month,      setMonth]      = useState(today.slice(0, 7))
-  const [year,       setYear]       = useState(today.slice(0, 4))
+  const today = new Date().toISOString().split('T')[0]
 
   const [trendData,      setTrendData]      = useState([])
   const [loading,        setLoading]        = useState(false)
   const [peakWorkers,    setPeakWorkers]    = useState(null)
   const [peakViolations, setPeakViolations] = useState(null)
-  const [totals,         setTotals]         = useState({ workers: 0, violations: 0 })
-  const [showTotal,      setShowTotal]      = useState(true)
-  const [showWorkers,    setShowWorkers]    = useState(true)
-  const [showViols,      setShowViols]      = useState(true)
+  const [totals,         setTotals]         = useState({ workers:0, newViols:0, repViols:0 })
+  const [dataNote,       setDataNote]       = useState('')
 
   const canvasRef = useRef(null)
   const chartRef  = useRef(null)
 
-  /* ── fetch trend data ── */
+  // ── fetch ─────────────────────────────────────────────────────────────
   const loadTrend = useCallback(async () => {
     setLoading(true)
-    try {
+    setDataNote('')
+    const cp = selectedLocation ? `&camera=${encodeURIComponent(selectedLocation)}` : ''
 
-      /* ── DATE mode: single day, hourly breakdown ── */
-      if (mode === 'date') {
+    try {
+      if (trendMode === 'date') {
         const apiDate = toApiDate(singleDate)
-        try {
-          const r = await fetch(`/api/hourly-trend?date=${apiDate}&shift=both`)
-          if (!r.ok) { setTrendData([]); setLoading(false); return }
-          const raw = await r.json()
-          const points = (Array.isArray(raw) ? raw : []).map(d => ({
-            label:         d.hour,
-            total_workers: d.workers_active || 0,
-            violations:    d.violations     || 0,
-          }))
-          setTrendData(points)
-        } catch {
-          setTrendData([])
-        }
+        const r = await fetch(`/api/live-trend?date=${apiDate}&shift=both${cp}`)
+        if (!r.ok) { setTrendData([]); setLoading(false); return }
+        const raw = await r.json()
+        setTrendData((Array.isArray(raw) ? raw : []).map(d => ({
+          label:        d.minute,
+          workers:      Math.max(0, (d.total_workers ?? d.max_workers ?? 0) - (d.new_violations ?? 0) - (d.repeated_violations ?? 0)),
+          totalWorkers: d.total_workers       ?? d.max_workers ?? 0,
+          newViols:     d.new_violations      ?? 0,
+          repViols:     d.repeated_violations ?? 0,
+        })))
         setLoading(false)
         return
       }
 
-      /* ── RANGE / MONTHLY mode: one point per day ── */
-      if (mode === 'range' || mode === 'monthly') {
-        const from = mode === 'monthly' ? `${month}-01` : rangeFrom
-        const to   = mode === 'monthly'
-          ? new Date(parseInt(month.slice(0, 4)), parseInt(month.slice(5, 7)), 0)
-              .toISOString().split('T')[0]
-          : rangeTo
+      let url = `/api/trend-summary?mode=${trendMode}${cp}`
+      if (trendMode === 'range')   url += `&date_from=${rangeFrom}&date_to=${rangeTo}`
+      if (trendMode === 'monthly') url += `&month=${month}`
+      if (trendMode === 'yearly')  url += `&year=${year}`
 
-        const days = []
-        const cur  = new Date(from)
-        const end  = new Date(to)
-        while (cur <= end) {
-          days.push(cur.toISOString().split('T')[0])
-          cur.setDate(cur.getDate() + 1)
+      const r = await fetch(url)
+      if (!r.ok) { setTrendData([]); setLoading(false); return }
+      const raw = await r.json()
+
+      const points = (Array.isArray(raw) ? raw : []).map(d => ({
+        label:        d.label,
+        workers:      d.avg_workers              ?? 0,
+        totalWorkers: d.avg_total_workers         ?? d.peak_workers ?? 0,
+        newViols:     d.avg_new_violations        ?? 0,
+        repViols:     d.avg_repeated_violations   ?? 0,
+        _peakWorkers: d.peak_workers              ?? 0,
+        _totalNew:    d.total_new_violations      ?? 0,
+        _totalRep:    d.total_repeated_violations ?? 0,
+        _dataPoints:  d.data_points               ?? 0,
+      }))
+
+      setTrendData(points)
+
+      if (points.length > 0) {
+        if (trendMode === 'range') {
+          const totalDays = Math.round((new Date(rangeTo) - new Date(rangeFrom)) / 86400000) + 1
+          if (points.length < totalDays)
+            setDataNote(`Data on ${points.length} of ${totalDays} days in range`)
+        } else if (trendMode === 'monthly') {
+          const [y2, m2] = month.split('-').map(Number)
+          const daysInMonth = new Date(y2, m2, 0).getDate()
+          if (points.length < daysInMonth)
+            setDataNote(`Data on ${points.length} of ${daysInMonth} days this month`)
+        } else if (trendMode === 'yearly') {
+          if (points.length < 12)
+            setDataNote(`Data in ${points.length} of 12 months this year`)
         }
-
-        const todayStr   = new Date().toISOString().split('T')[0]
-        const cappedDays = days.filter(d => d <= todayStr)
-
-        const points = await Promise.all(
-          cappedDays.map(async (day) => {
-            try {
-              const r = await fetch(`/api/kpi-period?date_from=${day}&date_to=${day}`)
-              if (!r.ok) return { label: day, total_workers: 0, violations: 0 }
-              const d = await r.json()
-              return {
-                label:         day,
-                total_workers: d.total_workers    ?? 0,
-                violations:    d.total_violations ?? 0,
-              }
-            } catch {
-              return { label: day, total_workers: 0, violations: 0 }
-            }
-          })
-        )
-        setTrendData(points.filter(p => p.total_workers > 0 || p.violations > 0))
-
-      /* ── YEARLY mode: one point per month ── */
-      } else {
-        const MONTHS  = ['01','02','03','04','05','06','07','08','09','10','11','12']
-        const MLABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-        const todayStr    = new Date().toISOString().split('T')[0]
-        const currentYear = todayStr.slice(0, 4)
-        const currentMon  = parseInt(todayStr.slice(5, 7))
-
-        const points = await Promise.all(
-          MONTHS.map(async (mm, idx) => {
-            const monthNum = idx + 1
-            if (year === currentYear && monthNum > currentMon) return null
-
-            const from    = `${year}-${mm}-01`
-            const lastDay = (year === currentYear && monthNum === currentMon)
-              ? todayStr
-              : new Date(parseInt(year), monthNum, 0).toISOString().split('T')[0]
-
-            try {
-              const r = await fetch(`/api/kpi-period?date_from=${from}&date_to=${lastDay}`)
-              if (!r.ok) return { label: `${MLABELS[idx]} ${year}`, total_workers: 0, violations: 0 }
-              const d = await r.json()
-              return {
-                label:         `${MLABELS[idx]} ${year}`,
-                total_workers: d.total_workers    ?? 0,
-                violations:    d.total_violations ?? 0,
-              }
-            } catch {
-              return { label: `${MLABELS[idx]} ${year}`, total_workers: 0, violations: 0 }
-            }
-          })
-        )
-        setTrendData(points.filter(p => p !== null))
       }
 
     } catch (err) {
@@ -263,370 +187,235 @@ function WorkerViolationTrendChart() {
       setTrendData([])
     }
     setLoading(false)
-  }, [mode, singleDate, rangeFrom, rangeTo, month, year])
+  }, [trendMode, singleDate, rangeFrom, rangeTo, month, year, selectedLocation])
 
-  /* ── auto-reload whenever any dependency changes ── */
   useEffect(() => { loadTrend() }, [loadTrend])
 
-  /* ── compute peak / totals ── */
+  // ── peak / totals ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!trendData.length) {
-      setPeakWorkers(null)
-      setPeakViolations(null)
-      setTotals({ workers: 0, violations: 0 })
-      return
+      setPeakWorkers(null); setPeakViolations(null)
+      setTotals({ workers:0, newViols:0, repViols:0 }); return
     }
-    const maxW = trendData.reduce((m, d) => d.total_workers > (m?.v ?? 0) ? { v: d.total_workers, l: d.label } : m, null)
-    const maxV = trendData.reduce((m, d) => d.violations    > (m?.v ?? 0) ? { v: d.violations,    l: d.label } : m, null)
-    const sumW = trendData.reduce((s, d) => s + (d.total_workers ?? 0), 0)
-    const sumV = trendData.reduce((s, d) => s + (d.violations    ?? 0), 0)
-    setPeakWorkers(maxW)
-    setPeakViolations(maxV)
-    setTotals({ workers: sumW, violations: sumV })
-  }, [trendData])
+    if (trendMode === 'date') {
+      setPeakWorkers(trendData.reduce((m,d) => d.workers > (m?.v??0) ? {v:d.workers, l:d.label} : m, null))
+      setPeakViolations(trendData.reduce((m,d) => d.newViols > (m?.v??0) ? {v:d.newViols, l:d.label} : m, null))
+      setTotals({
+        workers:  trendData.reduce((s,d) => s+(d.workers??0), 0),
+        newViols: trendData.reduce((s,d) => s+(d.newViols??0), 0),
+        repViols: trendData.reduce((s,d) => s+(d.repViols??0), 0),
+      })
+    } else {
+      const maxW = trendData.reduce((m,d) => (d._peakWorkers??0)>(m?.v??0) ? {v:d._peakWorkers,l:d.label} : m, null)
+      const maxV = trendData.reduce((m,d) => (d._totalNew??0)>(m?.v??0)    ? {v:d._totalNew,   l:d.label} : m, null)
+      setPeakWorkers(maxW); setPeakViolations(maxV)
+      setTotals({
+        workers:  maxW?.v ?? 0,
+        newViols: trendData.reduce((s,d) => s+(d._totalNew??0), 0),
+        repViols: trendData.reduce((s,d) => s+(d._totalRep??0), 0),
+      })
+    }
+  }, [trendData, trendMode])
 
-  /* ── draw / update chart ── */
+  // ── draw chart ────────────────────────────────────────────────────────
   useEffect(() => {
     const ctx = canvasRef.current
     if (!ctx) return
     if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null }
     if (!trendData.length) return
 
-    const labels     = trendData.map(d => d.label)
-    const workerVals = trendData.map(d => d.total_workers ?? 0)
-    const violVals   = trendData.map(d => d.violations    ?? 0)
-
     chartRef.current = new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels,
-    datasets: [
-      showWorkers && {
-        label:            'Safe Workers',
-        data:             workerVals,
-        borderColor:      'rgba(29,200,130,1)',
-        backgroundColor:  'rgba(29,200,130,0.10)',
-        borderWidth:      2.5,
-        pointRadius:      mode === 'date' ? 4 : 3,
-        pointHoverRadius: 6,
-        tension:          0.4,
-        fill:             true,
-      },
-      showViols && {
-        label:            'Violations',
-        data:             violVals,
-        borderColor:      'rgba(229,62,62,0.9)',
-        backgroundColor:  'rgba(229,62,62,0.07)',
-        borderWidth:      2,
-        borderDash:       [5, 3],
-        pointRadius:      mode === 'date' ? 4 : 3,
-        pointHoverRadius: 6,
-        tension:          0.4,
-        fill:             true,
-      },
-    ].filter(Boolean),
-  },
-  options: {
-    responsive:          true,
-    maintainAspectRatio: false,
-    interaction:         { mode: 'index', intersect: false },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: 'rgba(16,24,36,0.92)',
-        titleColor:      '#c8d4e8',
-        bodyColor:       '#8a9ab8',
-        borderColor:     'rgba(255,255,255,0.08)',
-        borderWidth:     1,
-        padding:         10,
-        callbacks: {
-          title: (items) => {
-            if (!items.length) return ''
-            const lbl = items[0].label
-            if (mode === 'date') {
-              const hour = parseInt(lbl.split(':')[0])
-              const next = String(hour + 1).padStart(2, '0')
-              return `${String(hour).padStart(2, '0')}:00 – ${next}:00`
-            }
-            return lbl
+      type: 'line',
+      data: {
+        labels: trendData.map(d => d.label),
+        datasets: [
+          showTotalWorkers && {
+            label:'Total Workers',
+            data: trendData.map(d => d.totalWorkers ?? 0),
+            borderColor:'rgba(59,130,246,1)',
+            backgroundColor:'rgba(59,130,246,0.07)',
+            borderWidth:2, pointRadius:trendMode==='date'?0:3, pointHoverRadius:trendMode==='date'?4:6, tension:0.5, cubicInterpolationMode:'default', fill:true,
           },
-          label: c => ` ${c.dataset.label}: ${c.parsed.y}`,
-        },
+          showWorkers && {
+            label:'Safe Workers',
+            data: trendData.map(d => d.workers ?? 0),
+            borderColor:'rgba(29,200,130,1)',
+            backgroundColor:'rgba(29,200,130,0.10)',
+            borderWidth:2.5, pointRadius:trendMode==='date'?0:3, pointHoverRadius:trendMode==='date'?4:6, tension:0.5, cubicInterpolationMode:'default', fill:true,
+          },
+          showNewViols && {
+            label:'New Violations',
+            data: trendData.map(d => d.newViols ?? 0),
+            borderColor:'rgba(229,62,62,0.9)',
+            backgroundColor:'rgba(229,62,62,0.07)',
+            borderWidth:2, borderDash:[5,3], pointRadius:trendMode==='date'?0:3, pointHoverRadius:trendMode==='date'?4:6, tension:0.5, cubicInterpolationMode:'default', fill:true,
+          },
+          showRepViols && {
+            label:'Repeated Violations',
+            data: trendData.map(d => d.repViols ?? 0),
+            borderColor:'rgba(251,146,60,0.9)',
+            backgroundColor:'rgba(251,146,60,0.07)',
+            borderWidth:1.8, borderDash:[3,3], pointRadius:trendMode==='date'?0:3, pointHoverRadius:trendMode==='date'?4:6, tension:0.5, cubicInterpolationMode:'default', fill:true,
+          },
+        ].filter(Boolean),
       },
-    },
-    scales: {
-      x: {
-        ticks: {
-          color:         '#666f82',
-          font:          { size: 10 },
-          maxTicksLimit: mode === 'date' ? 24 : 12,
-          autoSkip:      true,
-          callback: function(_, index) {
-            const lbl = labels[index]
-            if (!lbl) return null
-            if (mode === 'date') return parseInt(lbl.split(':')[0])
-            return lbl
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{
+          legend:{ display:false },
+          tooltip:{
+            backgroundColor:'rgba(16,24,36,0.92)', titleColor:'#c8d4e8', bodyColor:'#8a9ab8',
+            borderColor:'rgba(255,255,255,0.08)', borderWidth:1, padding:10,
+            mode:'index', intersect:false,
+            callbacks:{
+              title: items => items[0]?.label ?? '',
+              label: c => ` ${c.dataset.label}: ${trendMode==='date' ? c.parsed.y : c.parsed.y.toFixed(2)+' avg'}`,
+            },
           },
         },
-        grid:  { color: 'rgba(255,255,255,0.04)' },
-        title: {
-          display: true,
-          text:    mode === 'date' ? 'Hour of day' : mode === 'yearly' ? 'Month' : 'Date',
-          color:   '#5a6a82',
-          font:    { size: 10 },
+        scales:{
+          x: {
+            ticks: {
+              color: '#666f82', font: { size: 10 }, autoSkip: false, maxRotation: 0,
+              callback: function(val, index) {
+                const label = trendData[index]?.label ?? ''
+                if (trendMode !== 'date') return label
+                if (!label) return ''
+                const [hh] = label.split(':')
+                const hour = parseInt(hh, 10)
+                const prevLabel = trendData[index - 1]?.label ?? ''
+                const prevHour = prevLabel ? parseInt(prevLabel.split(':')[0], 10) : -1
+                return hour !== prevHour ? String(hour) : ''
+              },
+            },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            title: {
+              display: true,
+              text: trendMode === 'date' ? 'Hour' : trendMode === 'yearly' ? 'Month' : 'Date',
+              color: '#5a6a82', font: { size: 10 },
+            },
+          },
+          y:{
+            beginAtZero:true,
+            ticks:{
+              color:'#666f82', font:{ size:10 },
+              callback: v => trendMode==='date' ? (Number.isInteger(v) ? v : null) : v.toFixed(1),
+            },
+            grid:{ color:'rgba(255,255,255,0.04)' },
+            title:{ display:true, text:trendMode==='date'?'count (per minute)':'avg per active minute', color:'#4a5a72', font:{ size:10 } },
+          },
         },
       },
-      y: {
-        beginAtZero: true,
-        ticks: {
-          color: '#666f82',
-          font:  { size: 10 },
-          callback: (val) => Number.isInteger(val) ? val : null,
-        },
-        grid:  { color: 'rgba(255,255,255,0.04)' },
-        title: {
-          display: true,
-          text:    mode === 'date' ? 'count (per hour)' : 'count',
-          color:   '#4a5a72',
-          font:    { size: 10 },
-        },
-      },
-    },
-  },
-})
+    })
+
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null } }
-  }, [trendData, showWorkers, showViols, mode])
+  }, [trendData, showWorkers, showNewViols, showRepViols, showTotalWorkers, trendMode])
 
-  /* ── year options ── */
-  const currentYear = parseInt(today.slice(0, 4))
-  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
-
-  /* ── subtitle text ── */
   const subtitle = (() => {
-    const pts = trendData.length > 0 ? ` · ${trendData.length} data point${trendData.length > 1 ? 's' : ''}` : ''
-    if (mode === 'date')    return `Hourly · ${singleDate}${pts}`
-    if (mode === 'range')   return `${rangeFrom} → ${rangeTo}${pts}`
-    if (mode === 'monthly') return `Daily · ${month}${pts}`
-    if (mode === 'yearly')  return `Monthly · ${year}${pts}`
+    const pts = trendData.length > 0 ? ` · ${trendData.length} pt${trendData.length>1?'s':''}` : ''
+    if (trendMode==='date')    return `Per-minute data · ${singleDate}${pts}`
+    if (trendMode==='range')   return `Daily average · ${rangeFrom} → ${rangeTo}${pts}`
+    if (trendMode==='monthly') return `Daily average · ${month}${pts}`
+    if (trendMode==='yearly')  return `Monthly average · ${year}${pts}`
     return ''
   })()
 
   return (
-    <div className="panel" style={{ marginTop: 16 }}>
-      {/* ── header ── */}
-      <div className="panel-header">
-        <div className="panel-title">📈 Safe Workers vs Violations — Trend</div>
-        <div className="panel-subtitle">{subtitle}</div>
-      </div>
-
-      <div className="panel-body">
-
-        {/* ── controls row ── */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-
-          {/* mode toggle */}
-          <div style={{ display: 'flex', gap: 2, background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 3 }}>
-            {RANGE_MODES.map(m => (
-              <button
-                key={m.key}
-                onClick={() => setMode(m.key)}
-                style={{
-                  padding:    '4px 12px',
-                  borderRadius: 4,
-                  border:     'none',
-                  cursor:     'pointer',
-                  fontSize:   11,
-                  fontWeight: mode === m.key ? 600 : 400,
-                  background: mode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
-                  color:      mode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
-                  transition: 'all 0.15s',
-                }}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Date mode: single date picker */}
-          {mode === 'date' && (
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              📅 Date
-              <input
-                type="date"
-                className="date-picker"
-                value={singleDate}
-                max={today}
-                onChange={e => setSingleDate(e.target.value)}
-                style={{ marginLeft: 4 }}
-              />
-              {singleDate === today && (
-                <span style={{ fontSize: 10, color: 'rgba(29,200,130,1)', fontFamily: 'var(--font-mono)', marginLeft: 4 }}>
-                  TODAY
-                </span>
-              )}
+    <div className="panel" style={{ marginTop:16 }}>
+      <div className="panel-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div>
+          <div className="panel-title">📈 Worker Safety Trend — <span style={{ fontWeight:400, fontSize:12, color:'var(--text-muted)' }}>{subtitle}</span></div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'4px 10px',
+                        border:'1px solid var(--border)', borderRadius:4, background:'var(--bg-panel)' }}>
+            <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'rgba(59,130,246,1)', cursor:'pointer', userSelect:'none' }}>
+              <input type="checkbox" checked={showTotalWorkers} onChange={e => setShowTotalWorkers(e.target.checked)} style={{ accentColor:'rgba(59,130,246,1)', width:13, height:13 }} />
+              Total Workers
             </label>
-          )}
-
-          {/* Date Range mode */}
-          {mode === 'range' && (
-            <>
-              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                From
-                <input
-                  type="date" className="date-picker"
-                  value={rangeFrom} max={rangeTo}
-                  onChange={e => setRangeFrom(e.target.value)}
-                  style={{ marginLeft: 4 }}
-                />
-              </label>
-              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                To
-                <input
-                  type="date" className="date-picker"
-                  value={rangeTo} min={rangeFrom} max={today}
-                  onChange={e => setRangeTo(e.target.value)}
-                  style={{ marginLeft: 4 }}
-                />
-              </label>
-            </>
-          )}
-
-          {/* Monthly mode */}
-          {mode === 'monthly' && (
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              Month
-              <input
-                type="month" className="date-picker"
-                value={month} max={today.slice(0, 7)}
-                onChange={e => setMonth(e.target.value)}
-                style={{ marginLeft: 4 }}
-              />
-            </label>
-          )}
-
-          {/* Yearly mode */}
-          {mode === 'yearly' && (
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
-              Year
-              <select
-                className="date-picker" value={year}
-                onChange={e => setYear(e.target.value)}
-                style={{ marginLeft: 4 }}
-              >
-                {yearOptions.map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-            </label>
-          )}
-
-          {/* Checkboxes */}
-          <div style={{
-            display:    'flex',
-            alignItems: 'center',
-            gap:        10,
-            padding:    '4px 10px',
-            border:     '1px solid var(--border)',
-            borderRadius: 4,
-            background: 'var(--bg-panel)',
-          }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(29,200,130,1)', cursor: 'pointer', userSelect: 'none' }}>
-              <input
-                type="checkbox" checked={showWorkers}
-                onChange={e => setShowWorkers(e.target.checked)}
-                style={{ accentColor: 'rgba(29,200,130,1)', cursor: 'pointer', width: 13, height: 13 }}
-              />
+            <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'rgba(29,200,130,1)', cursor:'pointer', userSelect:'none' }}>
+              <input type="checkbox" checked={showWorkers} onChange={e => setShowWorkers(e.target.checked)} style={{ accentColor:'rgba(29,200,130,1)', width:13, height:13 }} />
               Safe Workers
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(229,62,62,0.9)', cursor: 'pointer', userSelect: 'none' }}>
-              <input
-                type="checkbox" checked={showViols}
-                onChange={e => setShowViols(e.target.checked)}
-                style={{ accentColor: 'rgba(229,62,62,0.9)', cursor: 'pointer', width: 13, height: 13 }}
-              />
-              Violations
+            <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'rgba(229,62,62,0.9)', cursor:'pointer', userSelect:'none' }}>
+              <input type="checkbox" checked={showNewViols} onChange={e => setShowNewViols(e.target.checked)} style={{ accentColor:'rgba(229,62,62,0.9)', width:13, height:13 }} />
+              New Violations
+            </label>
+            <label style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, color:'rgba(251,146,60,0.9)', cursor:'pointer', userSelect:'none' }}>
+              <input type="checkbox" checked={showRepViols} onChange={e => setShowRepViols(e.target.checked)} style={{ accentColor:'rgba(251,146,60,0.9)', width:13, height:13 }} />
+              Repeated
             </label>
           </div>
-
-          {/* Refresh button */}
-          <button
-            onClick={loadTrend}
-            disabled={loading}
-            style={{
-              marginLeft:   'auto',
-              background:   'var(--bg-base)',
-              border:       '1px solid var(--border)',
-              borderRadius: 4,
-              color:        'var(--text-muted)',
-              padding:      '3px 10px',
-              fontSize:     11,
-              cursor:       loading ? 'not-allowed' : 'pointer',
-            }}
-          >
+          <button onClick={loadTrend} disabled={loading} style={{
+            background:'var(--bg-base)', border:'1px solid var(--border)',
+            borderRadius:4, color:'var(--text-muted)', padding:'3px 10px', fontSize:11,
+            cursor:loading ? 'not-allowed' : 'pointer',
+          }}>
             {loading ? '⏳' : '🔄'} Refresh
           </button>
         </div>
+      </div>
 
-        {/* ── peak stats bar ── */}
-        {!loading && peakWorkers && (
-          <div style={{
-            display:      'flex',
-            flexWrap:     'wrap',
-            gap:          '6px 20px',
-            marginBottom: 10,
-            padding:      '8px 12px',
-            background:   'var(--bg-base)',
-            borderRadius: 6,
-            fontSize:     11,
-            color:        'var(--text-muted)',
-          }}>
-            <span>
-              👷 <strong style={{ color: 'rgba(29,200,130,0.95)' }}>
-                Peak Workers: {peakWorkers.v}
-              </strong>
-              <span style={{ opacity: 0.6 }}> @ {peakWorkers.l}</span>
-            </span>
-            <span style={{ opacity: 0.4 }}>|</span>
-            <span>
-              🚨 <strong style={{ color: 'rgba(229,62,62,0.9)' }}>
-                Peak Violations: {peakViolations?.v ?? 0}
-              </strong>
-              <span style={{ opacity: 0.6 }}> @ {peakViolations?.l}</span>
-            </span>
-            <span style={{ opacity: 0.4 }}>|</span>
-            <span style={{ opacity: 0.6 }}>Safe Workers: <strong>{totals.workers}</strong></span>
-            <span style={{ opacity: 0.4 }}>|</span>
-            <span style={{ opacity: 0.6 }}>Total Violations: <strong>{totals.violations}</strong></span>
+      <div className="panel-body">
+        {!loading && dataNote && (
+          <div style={{ fontSize:10, color:'rgba(251,146,60,0.8)', marginBottom:6, padding:'4px 10px', background:'rgba(251,146,60,0.07)', borderRadius:4, border:'1px solid rgba(251,146,60,0.15)', display:'inline-block' }}>
+            📊 {dataNote} — averages from days with data only
           </div>
-          
         )}
-
-        {/* ── chart canvas ── */}
-        <div style={{ height: 220, position: 'relative' }}>
+        {trendMode!=='date' && !loading && trendData.length>0 && (
+          <div style={{ fontSize:10, color:'var(--text-muted)', opacity:0.5, marginBottom:6, fontStyle:'italic' }}>
+            ℹ️ Y-axis: average per active minute within each {trendMode==='yearly'?'month':'day'}
+          </div>
+        )}
+        <div style={{ height:280, position:'relative' }}>
           {loading ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
-              Loading trend data…
-            </div>
-          ) : trendData.length === 0 ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 13 }}>
-              No data for selected period
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text-muted)', fontSize:13 }}>Loading trend data…</div>
+          ) : trendData.length===0 ? (
+            <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:6 }}>
+              <div style={{ color:'var(--text-muted)', fontSize:13 }}>No data for selected period</div>
+              {trendMode!=='date' && <div style={{ color:'var(--text-muted)', fontSize:11, opacity:0.5 }}>Try a different range or check if data exists</div>}
             </div>
           ) : (
-            <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
+            <canvas ref={canvasRef} style={{ width:'100%', height:'100%' }} />
           )}
         </div>
-
       </div>
     </div>
   )
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PPECompliance — main export
+// ═══════════════════════════════════════════════════════════════════════════
+export default function PPECompliance({ selectedDate, onDateChange, visibleLocations = [], isAdmin = false }) {
 
-/* ============================================================
-   PPECompliance  (main export)
-   ============================================================ */
-export default function PPECompliance({ selectedDate, onDateChange }) {
-  const today = new Date().toISOString().split('T')[0]
+  const LOCATIONS = [
+    { label: 'All Locations', value: '' },
+    ...visibleLocations.flatMap(loc => {
+      if (loc.subLocations) {
+        return loc.subLocations.map(sub => ({
+          label: `${loc.label} — ${sub.label}`,
+          value: sub.cameras[0]?.name ?? '',
+        }))
+      }
+      return [{ label: loc.label, value: loc.cameras[0]?.name ?? '' }]
+    }),
+  ]
+
+  const [selectedLocation, setSelectedLocation] = useState(() =>
+    isAdmin ? '' : (
+      visibleLocations.flatMap(loc =>
+        loc.subLocations
+          ? loc.subLocations.flatMap(s => s.cameras)
+          : loc.cameras
+      )[0]?.name ?? ''
+    )
+  )
+
+  const today        = new Date().toISOString().split('T')[0]
+  const firstOfMonth = today.slice(0, 8) + '01'
+  const currentYear  = today.slice(0, 4)
 
   const [date,        setDate]        = useState(toApiDate(selectedDate) || today)
   const [loading,     setLoading]     = useState(false)
@@ -639,217 +428,364 @@ export default function PPECompliance({ selectedDate, onDateChange }) {
   const [onlyVestMiss,    setOnlyVestMiss]    = useState(0)
   const [bothMiss,        setBothMiss]        = useState(0)
 
+  // ✅ NEW — max workers states
+  const [maxWorkers,     setMaxWorkers]     = useState(0)
+  const [maxSafeWorkers, setMaxSafeWorkers] = useState(0)
+
+  const [trendMode,  setTrendMode]  = useState('date')
+  const [rangeFrom,  setRangeFrom]  = useState(firstOfMonth)
+  const [rangeTo,    setRangeTo]    = useState(today)
+  const [trendMonth, setTrendMonth] = useState(today.slice(0, 7))
+  const [trendYear,  setTrendYear]  = useState(currentYear)
+
+  const yearOptions = Array.from({ length:5 }, (_,i) => parseInt(currentYear) - i)
+
+  const singleDate = trendMode === 'date' ? date : date
+
   useEffect(() => {
     if (selectedDate) {
-      const normalised = toApiDate(selectedDate)
-      setDate(prev => prev !== normalised ? normalised : prev)
+      const n = toApiDate(selectedDate)
+      setDate(prev => prev !== n ? n : prev)
     }
   }, [selectedDate])
 
-  const loadZoneData = useCallback(async (apiDate, violationRows) => {
+  const loadZoneData = useCallback(async (apiDate, violationRows, camParam) => {
     setZoneLoading(true)
     try {
-      const res = await fetch(`/api/ppe-compliance-by-zone?date=${apiDate}`)
+      const res = await fetch(`/api/ppe-compliance-by-zone?date=${apiDate}${camParam}`)
       if (res.ok) {
         const data = await res.json()
-        if (Array.isArray(data) && data.length > 0) {
-          setZoneData(data)
-          setZoneLoading(false)
-          return
-        }
+        if (Array.isArray(data) && data.length > 0) { setZoneData(data); setZoneLoading(false); return }
       }
-    } catch (_) { /* fall through */ }
+    } catch (_) {}
 
     if (violationRows && violationRows.length > 0) {
       const map = {}
       violationRows.forEach(r => {
         const cam = r.camera || r.zone || 'Unknown'
-        if (!map[cam]) map[cam] = {
-          camera:             cam,
-          wearing_helmet:     0,
-          not_wearing_helmet: 0,
-          wearing_vest:       0,
-          not_wearing_vest:   0,
-        }
+        if (!map[cam]) map[cam] = { camera:cam, wearing_helmet:0, not_wearing_helmet:0, wearing_vest:0, not_wearing_vest:0 }
         const missing = Array.isArray(r.missing) ? r.missing : (r.missing_ppe || [])
         missing.includes('helmet') ? map[cam].not_wearing_helmet++ : map[cam].wearing_helmet++
         missing.includes('vest')   ? map[cam].not_wearing_vest++   : map[cam].wearing_vest++
       })
-      setZoneData(Object.values(map).sort((a, b) => a.camera.localeCompare(b.camera)))
-    } else {
-      setZoneData([])
-    }
+      setZoneData(Object.values(map).sort((a,b) => a.camera.localeCompare(b.camera)))
+    } else { setZoneData([]) }
+
     setZoneLoading(false)
   }, [])
 
+  // ── loadStats ─────────────────────────────────────────────────────────
   const loadStats = useCallback(async (d) => {
-    const apiDate = toApiDate(d)
-    setLoading(true)
-    setError(null)
+    const camParam = selectedLocation ? `&camera=${encodeURIComponent(selectedLocation)}` : ''
+    setLoading(true); setError(null)
 
-    try {
-      const workerRes = await fetch(`/api/ppe-violations?date=${apiDate}&limit=5000`)
-      if (!workerRes.ok) throw new Error('Failed to load violations')
-      const rawViolations = await workerRes.json()
+    const fetchRange = async (fromDate, toDate) => {
+      const from = new Date(fromDate)
+      const to   = new Date(toDate)
+      const days = []
+      for (let dt = new Date(from); dt <= to; dt.setDate(dt.getDate() + 1))
+        days.push(dt.toISOString().split('T')[0])
 
-      if (Array.isArray(rawViolations)) {
-      // Count directly from violation_type — no deduplication
-      const total = rawViolations.length
-
-      const hOnly = rawViolations.filter(r =>
-        r.violation_type === 'no_helmet'
-      ).length
-
-      const vOnly = rawViolations.filter(r =>
-        r.violation_type === 'no_vest'
-      ).length
-
-      const both = rawViolations.filter(r =>
-        r.violation_type === 'both_missing'
-      ).length
-
-      setTotalViolations(total)
-      setOnlyHelmetMiss(hOnly)
-      setOnlyVestMiss(vOnly)
-      setBothMiss(both)
-
-      await loadZoneData(apiDate, rawViolations)
-      } else {
-        setTotalViolations(0)
-        setOnlyHelmetMiss(0)
-        setOnlyVestMiss(0)
-        setBothMiss(0)
-        setZoneData([])
+      const batchSize = 31
+      const flat = []
+      for (let i = 0; i < days.length; i += batchSize) {
+        const batch = days.slice(i, i + batchSize)
+        const results = await Promise.all(
+          batch.map(day =>
+            fetch(`/api/ppe-violations?date=${day}&limit=5000${camParam}`)
+              .then(r => r.ok ? r.json() : [])
+              .catch(() => [])
+          )
+        )
+        results.forEach(arr => Array.isArray(arr) && flat.push(...arr))
       }
-    } catch (err) {
-      setError('Failed to load compliance data.')
+      return flat
     }
 
+    const applyFlat = async (flat, zoneRefDate) => {
+      setTotalViolations(flat.length)
+      setOnlyHelmetMiss(flat.filter(r => r.violation_type === 'no_helmet').length)
+      setOnlyVestMiss(flat.filter(r => r.violation_type === 'no_vest').length)
+      setBothMiss(flat.filter(r => r.violation_type === 'both_missing').length)
+      await loadZoneData(toApiDate(zoneRefDate), flat, camParam)
+    }
+
+    try {
+      if (trendMode === 'range') {
+        const flat = await fetchRange(rangeFrom, rangeTo)
+        await applyFlat(flat, rangeTo)
+        // Reset max workers for range mode
+        setMaxWorkers(0); setMaxSafeWorkers(0)
+
+      } else if (trendMode === 'monthly') {
+        const [y, m]  = trendMonth.split('-').map(Number)
+        const start   = `${trendMonth}-01`
+        const lastDay = new Date(y, m, 0).toISOString().split('T')[0]
+        const end     = lastDay > today ? today : lastDay
+        const flat    = await fetchRange(start, end)
+        await applyFlat(flat, end)
+        // Reset max workers for monthly mode
+        setMaxWorkers(0); setMaxSafeWorkers(0)
+
+      } else if (trendMode === 'yearly') {
+        const start = `${trendYear}-01-01`
+        const end   = `${trendYear}-12-31` > today ? today : `${trendYear}-12-31`
+        const flat  = await fetchRange(start, end)
+        await applyFlat(flat, end)
+        // Reset max workers for yearly mode
+        setMaxWorkers(0); setMaxSafeWorkers(0)
+
+      } else {
+        // ── Single date ──────────────────────────────────────────────
+        const apiDate = toApiDate(d)
+        const res = await fetch(`/api/ppe-violations?date=${apiDate}&limit=5000${camParam}`)
+        if (!res.ok) throw new Error('Failed')
+        const raw = await res.json()
+        if (Array.isArray(raw)) {
+          await applyFlat(raw, apiDate)
+        } else {
+          setTotalViolations(0); setOnlyHelmetMiss(0); setOnlyVestMiss(0); setBothMiss(0); setZoneData([])
+        }
+
+        // ✅ Fetch hourly trend for max workers — from SAME peak hour frame
+        try {
+          const trendRes = await fetch(`/api/hourly-trend?date=${apiDate}&shift=both${camParam}`)
+          if (trendRes.ok) {
+            const trendRows = await trendRes.json()
+            if (Array.isArray(trendRows) && trendRows.length > 0) {
+              // Step 1: Find the hour with MAX workers_active
+              const peakRow = trendRows.reduce((best, row) =>
+                (Number(row.workers_active || row.max_workers || 0)) >
+                (Number(best.workers_active || best.max_workers || 0))
+                  ? row : best
+              , trendRows[0])
+              // Step 2: Take violations from THAT SAME hour only
+              const maxW     = Number(peakRow.workers_active || peakRow.max_workers || 0)
+              const maxViols = Number(peakRow.violations || peakRow.new_violations || 0)
+              setMaxWorkers(maxW)
+              setMaxSafeWorkers(Math.max(0, maxW - maxViols))
+            } else {
+              setMaxWorkers(0); setMaxSafeWorkers(0)
+            }
+          } else {
+            setMaxWorkers(0); setMaxSafeWorkers(0)
+          }
+        } catch {
+          setMaxWorkers(0); setMaxSafeWorkers(0)
+        }
+      }
+
+    } catch { setError('Failed to load compliance data.') }
+
     setLoading(false)
-  }, [loadZoneData])
+  }, [selectedLocation, loadZoneData, trendMode, rangeFrom, rangeTo, trendMonth, trendYear, today])
 
-  useEffect(() => { loadStats(date) }, [date, loadStats])
+  useEffect(() => { loadStats(date) }, [date, selectedLocation, loadStats, trendMode, rangeFrom, rangeTo, trendMonth, trendYear])
 
-  const handleDateChange = (e) => {
-    const d = e.target.value
-    setDate(d)
-    onDateChange?.(d)
-  }
+  const handleDateChange = e => { const d = e.target.value; setDate(d); onDateChange?.(d) }
 
-  const pct = (n) => totalViolations > 0 ? Math.round((n / totalViolations) * 100) : 0
+  const pct = n => totalViolations > 0 ? Math.round((n / totalViolations) * 100) : 0
+  const locationLabel = LOCATIONS.find(l => l.value === selectedLocation)?.label || 'All Locations'
+
+  // Derived values for new card
+  const maxAtRisk = Math.max(0, maxWorkers - maxSafeWorkers)
 
   return (
     <div>
 
-      {/* ── Date picker bar ── */}
-      <div className="date-bar">
-        <span className="date-bar-label">📅 Viewing data for:</span>
-        <input
-          type="date" className="date-picker"
-          value={date} onChange={handleDateChange} max={today}
+      {/* ── FROZEN FILTER BAR ── */}
+      <div style={{
+        position:'sticky', top:0, zIndex:50,
+        background:'var(--bg-base)',
+        borderBottom:'1px solid var(--border)',
+        padding:'8px 16px',
+        display:'flex', flexWrap:'wrap', alignItems:'center', gap:10,
+        backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
+      }}>
+
+        {/* Location */}
+        <span style={{ fontSize:12, color:'var(--text-muted)', whiteSpace:'nowrap' }}>📍 Location:</span>
+        <div style={{ position:'relative', display:'inline-block' }}>
+          <select value={selectedLocation} onChange={e => setSelectedLocation(e.target.value)} style={{
+            background:'var(--bg-panel)',
+            border:`1px solid ${selectedLocation ? 'rgba(99,102,241,0.5)' : 'var(--border)'}`,
+            borderRadius:6, color:selectedLocation ? '#a5b4fc' : 'var(--text-primary)',
+            padding:'4px 36px 4px 12px', fontSize:12, cursor:'pointer',
+            fontWeight:selectedLocation ? 600 : 400, appearance:'none', outline:'none', transition:'border-color 0.15s',
+          }}>
+            {LOCATIONS.map(loc => (
+              <option key={loc.value} value={loc.value} style={{ background:'#1e293b', color:'#e2e8f0' }}>{loc.label}</option>
+            ))}
+          </select>
+          <span style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', pointerEvents:'none', color:'var(--text-muted)', fontSize:20 }}>▾</span>
+        </div>
+
+        {selectedLocation && isAdmin && (
+          <button onClick={() => setSelectedLocation('')} style={{
+            background:'none', border:'1px solid rgba(255,255,255,0.08)', borderRadius:5,
+            color:'#64748b', cursor:'pointer', fontSize:11, padding:'2px 8px', lineHeight:1.6,
+          }}>✕ All</button>
+        )}
+
+        {selectedLocation && (
+          <span style={{ fontSize:10, padding:'2px 8px', borderRadius:10, background:'rgba(99,102,241,0.15)', color:'#a5b4fc', border:'1px solid rgba(99,102,241,0.3)' }}>
+            {locationLabel}
+          </span>
+        )}
+
+        {/* Trend mode tabs */}
+        <span style={{ fontSize:12, color:'var(--text-muted)', whiteSpace:'nowrap' }}>📈 Trend:</span>
+        <div style={{ display:'flex', gap:2, background:'rgba(255,255,255,0.04)', borderRadius:6, padding:3 }}>
+          {RANGE_MODES.map(m => (
+            <button key={m.key} onClick={() => setTrendMode(m.key)} style={{
+              padding:'4px 12px', borderRadius:4, border:'none', cursor:'pointer',
+              fontSize:11, fontWeight:trendMode === m.key ? 600 : 400,
+              background:trendMode === m.key ? 'rgba(29,158,117,0.25)' : 'transparent',
+              color:trendMode === m.key ? 'var(--green-safe)' : 'var(--text-muted)',
+              transition:'all 0.15s',
+            }}>{m.label}</button>
+          ))}
+        </div>
+
+        {/* Date inputs per mode */}
+        {trendMode === 'date' && (
+          <label style={{ fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5 }}>
+            📅
+            <input type="date" className="date-picker" value={date} max={today} onChange={handleDateChange} style={{ marginLeft:4, fontSize:11 }} />
+            {date === today && <span style={{ fontSize:10, color:'rgba(29,200,130,1)', marginLeft:4 }}>LIVE</span>}
+          </label>
+        )}
+
+        {trendMode === 'range' && <>
+          <label style={{ fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5 }}>
+            📅 From <input type="date" className="date-picker" value={rangeFrom} max={rangeTo} onChange={e => setRangeFrom(e.target.value)} style={{ marginLeft:4, fontSize:11 }} />
+          </label>
+          <label style={{ fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5 }}>
+            To <input type="date" className="date-picker" value={rangeTo} min={rangeFrom} max={today} onChange={e => setRangeTo(e.target.value)} style={{ marginLeft:4, fontSize:11 }} />
+          </label>
+        </>}
+
+        {trendMode === 'monthly' && (
+          <label style={{ fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5 }}>
+            📅 <input type="month" className="date-picker" value={trendMonth} max={today.slice(0,7)} onChange={e => setTrendMonth(e.target.value)} style={{ marginLeft:4, fontSize:11 }} />
+          </label>
+        )}
+
+        {trendMode === 'yearly' && (
+          <label style={{ fontSize:11, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:5 }}>
+            📅 <select className="date-picker" value={trendYear} onChange={e => setTrendYear(e.target.value)} style={{ marginLeft:4, fontSize:11 }}>
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </label>
+        )}
+
+        <span style={{ color:'var(--border)', fontSize:16, userSelect:'none', margin:'0 2px' }}>|</span>
+      </div>
+      {/* end frozen bar */}
+
+      <div style={{ padding:'16px 0 0 0' }}>
+
+        {error && (
+          <div style={{ background:'rgba(229,62,62,0.12)', border:'1px solid rgba(229,62,62,0.3)', borderRadius:6, padding:'10px 14px', marginBottom:12, color:'var(--red-alert)', fontSize:12 }}>
+            ⚠️ {error}
+          </div>
+        )}
+
+        {/* ── 5 KPI cards ── */}
+        <div className="stat-grid" style={{ gridTemplateColumns:'repeat(5,1fr)', marginBottom:16 }}>
+
+          {/* Card 1 — Total Violations */}
+          <div className="stat-card red">
+            <div className="stat-icon">🚨</div>
+            <div className="stat-label">TOTAL VIOLATIONS</div>
+            <div className="stat-value red" style={{ fontSize:26 }}>{loading ? '…' : totalViolations}</div>
+            <div className="stat-delta">
+              {selectedLocation ? `${locationLabel} only` : 'workers with any PPE missing'}
+              {trendMode === 'range' && !loading && ` · ${rangeFrom} → ${rangeTo}`}
+            </div>
+          </div>
+
+          {/* Card 2 — Only Helmet Missing */}
+          <div className="stat-card amber">
+            <div className="stat-icon">⛑️</div>
+            <div className="stat-label">ONLY HELMET MISSING</div>
+            <div className="stat-value amber" style={{ fontSize:26 }}>{loading ? '…' : `${onlyHelmetMiss} / ${totalViolations}`}</div>
+            <div className="stat-delta">{loading ? '—' : `${pct(onlyHelmetMiss)}% of violations · vest OK`}</div>
+          </div>
+
+          {/* Card 3 — Only Vest Missing */}
+          <div className="stat-card amber">
+            <div className="stat-icon">🦺</div>
+            <div className="stat-label">ONLY VEST MISSING</div>
+            <div className="stat-value amber" style={{ fontSize:26 }}>{loading ? '…' : `${onlyVestMiss} / ${totalViolations}`}</div>
+            <div className="stat-delta">{loading ? '—' : `${pct(onlyVestMiss)}% of violations · helmet OK`}</div>
+          </div>
+
+          {/* Card 4 — Both Missing */}
+          <div className="stat-card red">
+            <div className="stat-icon">❌</div>
+            <div className="stat-label">BOTH MISSING</div>
+            <div className="stat-value red" style={{ fontSize:26 }}>{loading ? '…' : `${bothMiss} / ${totalViolations}`}</div>
+            <div className="stat-delta">{loading ? '—' : `${pct(bothMiss)}% high risk ⚠`}</div>
+          </div>
+
+          {/* ✅ Card 5 — Max Workers (NEW) */}
+          <div className="stat-card" style={{
+            border:'1px solid rgba(34,201,132,0.3)',
+            borderTop:'3px solid #22c984',
+          }}>
+            <div className="stat-icon">👷</div>
+            <div className="stat-label" style={{ color:'#22c984' }}>PEAK HOUR WORKERS</div>
+            <div className="stat-value" style={{ fontSize:26, color:'#22c984' }}>
+              {loading ? '…' : trendMode !== 'date' ? '—' : maxWorkers}
+            </div>
+            <div className="stat-delta" style={{ display:'flex', flexDirection:'column', gap:4, marginTop:4 }}>
+              <span style={{ color:'#22c984', fontSize:11 }}>
+                ✓ Max Safe: <strong>{loading ? '…' : trendMode !== 'date' ? '—' : maxSafeWorkers}</strong>
+              </span>
+              <span style={{ color:'#ef4444', fontSize:11 }}>
+                ✗ At Risk: <strong>{loading ? '…' : trendMode !== 'date' ? '—' : maxAtRisk}</strong>
+              </span>
+              {trendMode !== 'date' && (
+                <span style={{ color:'#64748b', fontSize:10, marginTop:2 }}>
+                  Available in Date mode only
+                </span>
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {/* ── Zone chart ── */}
+        <div className="panel">
+          <div className="panel-header">
+            <div className="panel-title">📹 Zone-wise Compliance vs Non-Compliance — Per Camera</div>
+            <div className="panel-subtitle">
+              {zoneData.length > 0
+                ? `${zoneData.length} camera${zoneData.length > 1 ? 's' : ''} · ${trendMode === 'range' ? `${rangeFrom} → ${rangeTo}` : date}${selectedLocation ? ` · ${locationLabel}` : ''}`
+                : `${trendMode === 'range' ? `${rangeFrom} → ${rangeTo}` : date}${selectedLocation ? ` · ${locationLabel}` : ''}`}
+            </div>
+          </div>
+          <div className="panel-body">
+            <ZoneLegend />
+            <div style={{ height:260 }}>
+              <ZoneComplianceChart zoneData={zoneData} loading={zoneLoading} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Trend chart ── */}
+        <WorkerViolationTrendChart
+          selectedLocation={selectedLocation}
+          trendMode={trendMode}
+          singleDate={date}
+          rangeFrom={rangeFrom}
+          rangeTo={rangeTo}
+          month={trendMonth}
+          year={trendYear}
         />
-        <span className="date-bar-hint">← change date to update compliance data</span>
-        <button
-          onClick={() => loadStats(date)}
-          disabled={loading}
-          style={{
-            marginLeft:   8,
-            background:   'var(--bg-base)',
-            border:       '1px solid var(--border)',
-            borderRadius: 4,
-            color:        'var(--text-muted)',
-            padding:      '3px 10px',
-            fontSize:     11,
-            cursor:       loading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {loading ? '⏳' : '🔄'} Refresh
-        </button>
-      </div>
-
-      {/* ── Error banner ── */}
-      {error && (
-        <div style={{
-          background:   'rgba(229,62,62,0.12)',
-          border:       '1px solid rgba(229,62,62,0.3)',
-          borderRadius: 6,
-          padding:      '10px 14px',
-          marginBottom: 12,
-          color:        'var(--red-alert)',
-          fontSize:     12,
-        }}>
-          ⚠️ {error}
-        </div>
-      )}
-
-      {/* ── 4 KPI cards ── */}
-      <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 16 }}>
-
-        <div className="stat-card red">
-          <div className="stat-icon">🚨</div>
-          <div className="stat-label">TOTAL VIOLATIONS</div>
-          <div className="stat-value red" style={{ fontSize: 26 }}>
-            {loading ? '…' : totalViolations}
-          </div>
-          <div className="stat-delta">workers with any PPE missing</div>
-        </div>
-
-        <div className="stat-card amber">
-          <div className="stat-icon">⛑️</div>
-          <div className="stat-label">ONLY HELMET MISSING</div>
-          <div className="stat-value amber" style={{ fontSize: 26 }}>
-            {loading ? '…' : `${onlyHelmetMiss} / ${totalViolations}`}
-          </div>
-          <div className="stat-delta">
-            {loading ? '—' : `${pct(onlyHelmetMiss)}% of violations · vest OK`}
-          </div>
-        </div>
-
-        <div className="stat-card amber">
-          <div className="stat-icon">🦺</div>
-          <div className="stat-label">ONLY VEST MISSING</div>
-          <div className="stat-value amber" style={{ fontSize: 26 }}>
-            {loading ? '…' : `${onlyVestMiss} / ${totalViolations}`}
-          </div>
-          <div className="stat-delta">
-            {loading ? '—' : `${pct(onlyVestMiss)}% of violations · helmet OK`}
-          </div>
-        </div>
-
-        <div className="stat-card red">
-          <div className="stat-icon">❌</div>
-          <div className="stat-label">BOTH MISSING</div>
-          <div className="stat-value red" style={{ fontSize: 26 }}>
-            {loading ? '…' : `${bothMiss} / ${totalViolations}`}
-          </div>
-          <div className="stat-delta">
-            {loading ? '—' : `${pct(bothMiss)}% high risk ⚠`}
-          </div>
-        </div>
 
       </div>
-
-      {/* ── Zone-wise compliance bar chart ── */}
-      <div className="panel">
-        <div className="panel-header">
-          <div className="panel-title">📹 Zone-wise Compliance vs Non-Compliance — Per Camera</div>
-          <div className="panel-subtitle">
-            {zoneData.length > 0
-              ? `${zoneData.length} camera${zoneData.length > 1 ? 's' : ''} · ${date}`
-              : date}
-          </div>
-        </div>
-        <div className="panel-body">
-          <ZoneLegend />
-          <div style={{ height: 260 }}>
-            <ZoneComplianceChart zoneData={zoneData} loading={zoneLoading} />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Worker vs Violations Trend chart ── */}
-      <WorkerViolationTrendChart />
-
     </div>
   )
 }

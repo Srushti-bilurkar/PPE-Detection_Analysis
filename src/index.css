@@ -321,8 +321,12 @@ button { cursor: pointer; }
    8. CONTENT AREA & SCREENS
    ============================================================ */
 .content-area {
-  flex: 1; overflow-y: auto; padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
   background: var(--bg-base);
+  position: relative;
+  scroll-behavior: smooth;
 }
 
 /* Each screen hidden by default; .active makes it visible */
@@ -453,7 +457,7 @@ button { cursor: pointer; }
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  overflow: hidden; margin-bottom: 16px;
+  overflow: visible; margin-bottom: 16px;
 }
 .panel-header {
   padding: 12px 16px;
@@ -1901,3 +1905,250 @@ body                     { font-size: 15px; }
 .rmc-row                 { font-size: 13px; }
 .rmc-val                 { font-size: 13px; font-weight: 700; }
 .res-event-label         { font-size: 12px; }
+
+/* ============================================================
+   46. LOGIN PAGE
+   ============================================================ */
+
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.lp-wrap {
+  min-height: 100vh;
+  background: #080e1a;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.lp-bg-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(30,80,160,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30,80,160,0.07) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+.lp-bg-glow1 {
+  position: absolute; top: -120px; left: -120px;
+  width: 500px; height: 500px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(37,99,235,0.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+.lp-bg-glow2 {
+  position: absolute; bottom: -80px; right: 60px;
+  width: 400px; height: 400px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(16,185,129,0.07) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.lp-left {
+  flex: 1;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 60px 48px;
+  position: relative; z-index: 1;
+}
+
+.lp-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 48px; }
+.lp-brand-icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  background: #0f2040; border: 1px solid rgba(59,130,246,0.4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; flex-shrink: 0;
+}
+.lp-brand-name { font-size: 24px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; }
+.lp-brand-tag  { font-size: 10px; color: #60a5fa; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 2px; }
+
+.lp-hero-title {
+  font-size: 36px; font-weight: 800; color: #f1f5f9;
+  line-height: 1.15; letter-spacing: -0.025em; margin-bottom: 14px;
+}
+.lp-hero-title span { color: #3b82f6; }
+.lp-hero-sub { font-size: 14px; color: #94a3b8; line-height: 1.65; max-width: 340px; margin-bottom: 40px; }
+
+.lp-stats {  display: none; gap: 16px; }
+.lp-stat {
+  padding: 12px 18px; border-radius: 10px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+}
+.lp-stat-num   { font-size: 20px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.02em; }
+.lp-stat-label { font-size: 10px; color: #7dd3fc; font-family: monospace; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 2px; }
+
+.lp-mosaic { display: flex; gap: 6px; margin-top: auto; padding-top: 48px; opacity: 0.4; }
+.lp-cam-tile {
+  width: 72px; height: 48px; border-radius: 6px;
+  background: #0d1f3a; border: 1px solid rgba(59,130,246,0.2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+}
+.lp-cam-dot  { width: 5px; height: 5px; border-radius: 50%; background: #22c55e; animation: pulse-dot 2s ease-in-out infinite; }
+.lp-cam-dot.offline { background: #ef4444; }
+.lp-cam-id   { font-size: 8px; color: #7dd3fc; font-family: monospace; }
+
+.lp-divider {
+  width: 1px; background: rgba(255,255,255,0.06);
+  margin: 40px 0; position: relative; z-index: 1;
+}
+
+.lp-right {
+  width: 440px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px 36px;
+  position: relative; z-index: 1;
+}
+
+.lp-card {
+  width: 100%;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 16px;
+  padding: 28px;
+}
+
+.lp-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.lp-card-title { font-size: 16px; font-weight: 700; color: #f1f5f9; }
+.lp-live-badge {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 9px; font-family: monospace; letter-spacing: 0.08em; color: #22c55e;
+  background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25);
+  padding: 3px 9px; border-radius: 20px;
+}
+.lp-live-dot { width: 5px; height: 5px; border-radius: 50%; background: #22c55e; animation: pulse-dot 1.5s ease-in-out infinite; }
+.lp-card-sub { font-size: 12px; color: #334155; margin-bottom: 22px; }
+
+.lp-section-label {
+  font-size: 9px; font-family: monospace; letter-spacing: 0.1em;
+  text-transform: uppercase; color: #1e3a5f;
+  margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.lp-section-label::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.05); }
+
+.lp-user-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+
+.lp-user-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  border: 1.5px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.02);
+  transition: all 0.14s; user-select: none;
+  position: relative; overflow: hidden;
+}
+.lp-user-item::before {
+  content: ''; position: absolute;
+  left: 0; top: 0; bottom: 0; width: 3px;
+  background: transparent; transition: background 0.14s;
+  border-radius: 0;
+}
+.lp-user-item:hover { border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); }
+.lp-user-item.sel-admin { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.08); }
+.lp-user-item.sel-admin::before { background: #3b82f6; }
+.lp-user-item.sel-user  { border-color: rgba(100,116,139,0.5); background: rgba(100,116,139,0.07); }
+.lp-user-item.sel-user::before  { background: #64748b; }
+
+.lp-avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; font-family: monospace; letter-spacing: 0.04em;
+}
+.lp-avatar-admin { background: rgba(59,130,246,0.2); color: #93c5fd; }
+.lp-avatar-user  { background: rgba(100,116,139,0.2); color: #94a3b8; }
+
+.lp-uinfo  { flex: 1; min-width: 0; }
+.lp-uname  { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.lp-ulocs  { font-size: 10px; color: #475569; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lp-uright { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; }
+.lp-badge  { font-size: 9px; font-weight: 700; font-family: monospace; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 8px; }
+.lp-badge-admin { background: rgba(59,130,246,0.15); color: #93c5fd; border: 1px solid rgba(59,130,246,0.25); }
+.lp-badge-user  { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.2); }
+
+.lp-check {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.12);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; color: transparent; transition: all 0.14s;
+}
+.lp-user-item.sel-admin .lp-check { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+.lp-user-item.sel-user  .lp-check { background: #64748b; border-color: #64748b; color: #fff; }
+
+.lp-access-preview {
+  margin-top: 14px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  display: flex; align-items: flex-start; gap: 8px; min-height: 44px;
+}
+.lp-ap-icon  { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.lp-ap-body  { font-size: 11px; color: #334155; line-height: 1.5; }
+.lp-ap-body.active { color: #94a3b8; }
+.lp-ap-locs  { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.lp-ap-loc   { font-size: 9px; font-family: monospace; padding: 2px 7px; border-radius: 5px; background: rgba(34,197,94,0.1); color: #4ade80; border: 1px solid rgba(34,197,94,0.2); }
+.lp-ap-loc.full { background: rgba(59,130,246,0.1); color: #93c5fd; border-color: rgba(59,130,246,0.2); }
+
+.lp-error {
+  font-size: 11px; color: #f87171;
+  background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 7px; padding: 8px 12px; text-align: center;
+  margin-bottom: 12px; display: none;
+}
+.lp-error.show { display: block; }
+
+.lp-btn {
+  width: 100%; padding: 13px; border-radius: 10px; border: none;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.02em;
+  cursor: pointer; transition: all 0.15s;
+  background: #3b82f6; color: #ffffff;
+}
+.lp-btn:not(:disabled):hover { background: #2563eb; transform: translateY(-1px); }
+.lp-btn:not(:disabled):active { transform: translateY(0); }
+.lp-btn:disabled { background: #0f2040; color: #1e3a5f; cursor: default; transform: none; }
+
+.lp-footer {
+  margin-top: 16px; text-align: center;
+  font-size: 10px; color: #1e3a5f; font-family: monospace; letter-spacing: 0.04em;
+}
+
+@media (max-width: 768px) {
+  .lp-wrap { flex-direction: column; }
+  .lp-left { padding: 32px 24px 24px; }
+  .lp-hero-title { font-size: 26px; }
+  .lp-mosaic { display: none; }
+  .lp-divider { display: none; }
+  .lp-right { width: 100%; padding: 0 24px 40px; }
+}
+.lp-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 40px;
+}
+.lp-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(59,130,246,0.05);
+  border: 1px solid rgba(59,130,246,0.12);
+}
+.lp-feature-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.lp-feature-text {
+  font-size: 13px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   47. LOGIN PAGE FIX
+   ============================================================ */
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#root > .lp-wrap {
+  flex: 1;
+}
